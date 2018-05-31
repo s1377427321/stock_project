@@ -3,10 +3,10 @@ package storage
 import (
 	"database/sql"
 	_ "github.com/go-sql-driver/mysql"
-	"log"
 	"model"
 	"fmt"
 	"constant"
+	"log"
 )
 
 var db = NewMysql()
@@ -48,23 +48,102 @@ func InsertTradeHis(days []*model.DayTrade) error {
 	if err != nil {
 		panic(err.Error())
 	}
+
+	begin, err := db.Begin()
+	if err != nil {
+		panic(err.Error())
+	}
+
+
 	defer stmt.Close()
+
+
 
 	for _, day := range days {
 		if day == nil {
 			continue
 		}
 		log.Println(day)
-		_, err = stmt.Exec(day.Code, day.Date,
+
+		_, err :=begin.Stmt(stmt).Exec(day.Code, day.Date,
 			day.Open, day.Close, day.High, day.Low,
 			day.Volume, day.Money)
+
+
 		if err != nil {
 			panic(err.Error())
 		}
 	}
 
+	err = begin.Commit()
+	if err != nil {
+		panic(err.Error())
+	}
+
 	return nil
 }
+
+//func InsertTradeHis(days []*model.DayTrade) error {
+//	sql := `
+//	INSERT INTO trade_his
+//	(
+//		code,
+//		date,
+//		open,
+//		close,
+//		high,
+//		low,
+//		volume,
+//		money
+//	) VALUES (
+//		?,
+//		?,
+//		?,
+//		?,
+//		?,
+//		?,
+//		?,
+//		?
+//	)`
+//
+//	stmt, err := db.Prepare(sql)
+//	if err != nil {
+//		panic(err.Error())
+//	}
+//
+//	begin, err := db.Begin()
+//	if err != nil {
+//		panic(err.Error())
+//	}
+//
+//
+//	defer stmt.Close()
+//
+//
+//
+//	for _, day := range days {
+//		if day == nil {
+//			continue
+//		}
+//		log.Println(day)
+//
+//		_, err :=begin.Stmt(stmt).Exec(day.Code, day.Date,
+//			day.Open, day.Close, day.High, day.Low,
+//			day.Volume, day.Money)
+//
+//
+//		if err != nil {
+//			panic(err.Error())
+//		}
+//	}
+//
+//	err = begin.Commit()
+//	if err != nil {
+//		panic(err.Error())
+//	}
+//
+//	return nil
+//}
 
 func GetTradeHis(stock *model.Stock, begin string, end string) []*model.DayTrade {
 	sql := `

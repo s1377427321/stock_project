@@ -25,8 +25,23 @@ func RunHttpServer() {
 
 	e.GET("/test", test)
 	e.GET("/tactics1", tactics1)
+	e.GET("/tactics1", percentTen)
 	e.Start(constant.HTTP_PORT)
 	fmt.Println("RunHttpServer -----------------")
+}
+
+func percentTen(c echo.Context) error {
+	c.Response().CloseNotify()
+	//code := c.QueryParam("code")
+	//money,_ := strconv.ParseFloat(c.QueryParam("money"), 64)
+	//day,_ := strconv.ParseFloat(c.QueryParam("day"), 64)
+
+
+
+
+
+
+	return  nil
 }
 
 func tactics1(c echo.Context) error {
