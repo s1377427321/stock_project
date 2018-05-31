@@ -12,6 +12,7 @@ const (
 	HQ_TIMLY_API = "https://app.leverfun.com/timelyInfo/timelyOrderForm?stockCode=%S"
 	DB_USER      = "root"
 	DB_PASSWORD  = "123456"
+	DB_IP		 = "120.79.154.53:3306"
 	DB_NAME      = "stock"
 	HTTP_PORT    = ":4343"
 )

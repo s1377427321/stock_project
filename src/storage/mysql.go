@@ -1,18 +1,20 @@
 package storage
 
 import (
-	"constant"
 	"database/sql"
-	"fmt"
 	_ "github.com/go-sql-driver/mysql"
 	"log"
 	"model"
+	"fmt"
+	"constant"
 )
 
 var db = NewMysql()
 
 func NewMysql() *sql.DB {
-	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@/%s", constant.DB_USER, constant.DB_PASSWORD, constant.DB_NAME))
+	dbData:= fmt.Sprintf("%s:%s@tcp(%s)/%s", constant.DB_USER, constant.DB_PASSWORD,constant.DB_IP ,constant.DB_NAME)
+	db, err := sql.Open("mysql", dbData)
+	//db, err := sql.Open("mysql", "root:@tcp(120.79.154.53:3306)/stock?charset=utf8")
 	if err != nil {
 		panic(err.Error())
 	}

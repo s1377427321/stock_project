@@ -21,7 +21,7 @@ func dailyTradeUpdate() {
 	all := stock.NewAllStock()
 	all.UpdateFromApi()
 	helper := trade.NewDayTradeHelper()
-	fmt.Println(helper)
+	//fmt.Println(helper)
 	sem := make(chan int, 1)
 	for _, stock := range all.Stocks {
 		if stock.Type == model.HU_A ||
