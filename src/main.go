@@ -24,17 +24,13 @@ func dailyTradeUpdate() {
 	helper := trade.NewDayTradeHelper()
 	fmt.Println(helper)
 	sem := make(chan int, 1)
-	var i int  =0
 	for _, stock := range all.Stocks {
 		if stock.Type == model.HU_A ||
 			stock.Type == model.SHEN_A ||
 			stock.Type == model.CHUANGYE ||
 			stock.Type == model.ZHONG_XIAO {
-			if i>20 {
-				break
-			}
+
 			sem <- 1
-			i++
 			go update(helper, stock, sem)
 		}
 	}
