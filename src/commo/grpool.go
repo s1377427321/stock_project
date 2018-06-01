@@ -1,4 +1,4 @@
-package grpool
+package commo
 
 import "sync"
 

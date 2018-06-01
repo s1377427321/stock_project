@@ -46,7 +46,7 @@ func percentTen(c echo.Context) error {
 
 func tactics1(c echo.Context) error {
 	c.Response().CloseNotify()
-	code := c.QueryParam("code")
+	code ,_:= strconv.Atoi(c.QueryParam("code"))
 	origPrice, _ := strconv.ParseFloat(c.QueryParam("origPrice"), 64)
 	bearLose, _ := strconv.ParseFloat(c.QueryParam("bearLose"), 64)
 	haveMoney, _ := strconv.ParseFloat(c.QueryParam("haveMoney"), 64)

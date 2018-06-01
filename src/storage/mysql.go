@@ -22,10 +22,11 @@ func NewMysql() *sql.DB {
 }
 
 func InsertTradeHis(days []*model.DayTrade) error {
+	//log.Println("day.Code------------start--------------------")
 	sql := `
 	INSERT INTO trade_his
 	(
-		code, 
+		code,
 		date,
 		open,
 		close,
@@ -34,7 +35,7 @@ func InsertTradeHis(days []*model.DayTrade) error {
 		volume,
 		money
 	) VALUES (
-		?, 
+		?,
 		?,
 		?,
 		?,
@@ -79,6 +80,7 @@ func InsertTradeHis(days []*model.DayTrade) error {
 	if err != nil {
 		panic(err.Error())
 	}
+	//log.Println("!!!!!!!!!!!!!!!!!!end!!!!!!!!!!!!!!!!!!")
 
 	return nil
 }

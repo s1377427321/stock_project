@@ -30,14 +30,14 @@ func Round64(f float64, n int) float64 {
 }
 
 type Grid struct {
-	Code      string `json:"code"`
+	Code      int `json:"code"`
 	Price     string `json:"price"`
 	StockNum  string `json:"stockNum"`
 	NeedMoney string `json:"needMoney"`
 	Percent   string `json:"percent"`
 }
 
-func NewTactics1(code string, op float64, bl float64, hm float64, div float64) *Tactics1 {
+func NewTactics1(code int, op float64, bl float64, hm float64, div float64) *Tactics1 {
 	op = Round64(op, 3)
 	bl = Round64(bl, 3)
 	hm = Round64(hm, 3)
@@ -55,7 +55,7 @@ func NewTactics1(code string, op float64, bl float64, hm float64, div float64) *
 }
 
 type Tactics1 struct {
-	code      string
+	code      int
 	origPrice float64
 	bearLose  float64
 	haveMoney float64

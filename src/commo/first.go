@@ -1,11 +1,10 @@
-package grpool
+package commo
 
 import (
 	"fmt"
 	"runtime"
 	"time"
 
-	"grpool"
 )
 
 func first() {
@@ -13,7 +12,7 @@ func first() {
 	runtime.GOMAXPROCS(numCPUs)
 
 	// number of workers, and size of job queue
-	pool := grpool.NewPool(100, 50)
+	pool := NewPool(100, 50)
 
 	// release resources used by pool
 	defer pool.Release()

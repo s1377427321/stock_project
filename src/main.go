@@ -11,7 +11,8 @@ import (
 	"trade"
 )
 
-func update(helper *trade.DayTradeHelper, stock *model.Stock, sem chan int) {
+func update(helper *trade.DayTradeHelper, stock *model.Stock,sem chan int) {
+	log.Println(stock.Code)
 	helper.Update(stock)
 	<-sem
 }
@@ -21,17 +22,40 @@ func dailyTradeUpdate() {
 	all := stock.NewAllStock()
 	all.UpdateFromApi()
 	helper := trade.NewDayTradeHelper()
-	//fmt.Println(helper)
+	fmt.Println(helper)
 	sem := make(chan int, 1)
+	var i int  =0
 	for _, stock := range all.Stocks {
 		if stock.Type == model.HU_A ||
 			stock.Type == model.SHEN_A ||
 			stock.Type == model.CHUANGYE ||
 			stock.Type == model.ZHONG_XIAO {
+			if i>20 {
+				break
+			}
 			sem <- 1
+			i++
 			go update(helper, stock, sem)
 		}
 	}
+
+	//pool := commo.NewPool(20,10)
+	//
+	//for _,stock:=range all.Stocks{
+	//	if stock.Type == model.HU_A ||
+	//		stock.Type == model.SHEN_A ||
+	//		stock.Type == model.CHUANGYE ||
+	//		stock.Type == model.ZHONG_XIAO {
+	//
+	//		pool.JobQueue<- func() {
+	//			update(helper, stock)
+	//		}
+	//
+	//	}
+	//}
+
+	log.Println("----------dailyTradeUpdate  end----------------")
+
 }
 
 func main() {

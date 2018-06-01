@@ -10,9 +10,9 @@ import (
 	"log"
 	"model"
 	"net/http"
-	"storage"
 	"strconv"
 	"strings"
+	"storage"
 	"time"
 )
 
@@ -28,12 +28,13 @@ func NewDayTradeHelper() *DayTradeHelper {
 }
 
 func (this *DayTradeHelper) Update(stock *model.Stock) {
-	day := storage.GetLatestDayStock(stock)
+	day:=storage.GetLatestDayStock(stock)
 	now := time.Now().Format("20060102")
 	var added []*model.DayTrade
 	if day == nil || day.Date == "" {
 		// init all
-		before := time.Unix(time.Now().Unix()-3600*24*365*5, 0).Format("20060102")
+		before := time.Unix(time.Now().Unix()-3600*24*60, 0).Format("20060102")
+		//before := time.Unix(time.Now().Unix()-3600*24*1, 0).Format("20060102")
 		added = this.getTrade(stock, before, now)
 	} else {
 		last, _ := time.Parse("2006-01-02", day.Date)
@@ -47,7 +48,7 @@ func (this *DayTradeHelper) Update(stock *model.Stock) {
 	}
 
 	storage.InsertTradeHis(added)
-	log.Println("add ", stock.Code, len(added), " days trade info")
+	log.Println("add ", stock.Code, " days trade info")
 }
 
 func (this *DayTradeHelper) getTrade(stock *model.Stock, begin string, end string) []*model.DayTrade {
@@ -96,13 +97,15 @@ func (this *DayTradeHelper) getTrade(stock *model.Stock, begin string, end strin
 		High, _ := strconv.ParseFloat(cols[4], 32)
 		Volume, _ := strconv.Atoi(cols[11])
 		Money, _ := strconv.ParseFloat(cols[12], 32)
+		Code,_:=strconv.Atoi(strings.TrimLeft(cols[1], "'"))
+
 		if Open == 0 {
 			continue
 		}
 
 		days = append(days, &model.DayTrade{
 			Date:   cols[0],
-			Code:   strings.TrimLeft(cols[1], "'"),
+			Code:   Code,
 			Close:  float32(Close),
 			High:   float32(High),
 			Low:    float32(Low),
