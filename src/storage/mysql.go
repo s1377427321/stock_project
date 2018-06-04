@@ -195,6 +195,57 @@ func GetTradeHis(stock *model.Stock, begin string, end string) []*model.DayTrade
 	return days
 }
 
+func GetLatestSomeDataFromDay(code ,dayNum int) map[string]*model.DayTrade  {
+	sql:=`
+	SELECT 
+		code, 
+		date,
+		open,
+		close,
+		high,
+		low,
+		volume,
+		money
+	FROM trade_his
+	WHERE code = ?
+	ORDER BY date DESC
+	LIMIT ?
+	`
+	stmt, err := db.Prepare(sql)
+
+	if err != nil {
+		panic(err.Error())
+	}
+	defer stmt.Close()
+
+	days :=  make(map[string]*model.DayTrade,1)
+	rows,err := stmt.Query(code,dayNum)
+
+	if err != nil {
+		panic(err.Error())
+	}
+
+	for rows.Next() {
+		day := &model.DayTrade{}
+		err = rows.Scan(
+			&day.Code,
+			&day.Date,
+			&day.Open,
+			&day.Close,
+			&day.High,
+			&day.Low,
+			&day.Volume,
+			&day.Money,
+		)
+		if err != nil {
+			return nil
+		}
+		days[day.Date] = day
+	}
+
+	return days
+}
+
 /**
  * 某只股票最新一天的交易数据
  */
@@ -320,3 +371,5 @@ func UpSertStockInfo(stocks []*model.Stock) error {
 	}
 	return nil
 }
+
+

@@ -10,6 +10,7 @@ import (
 	//	"sort"
 	"strconv"
 	"tactics"
+	"tactics/percentTen"
 )
 
 type H map[string]interface{}
@@ -25,21 +26,29 @@ func RunHttpServer() {
 
 	e.GET("/test", test)
 	e.GET("/tactics1", tactics1)
-	e.GET("/tactics1", percentTen)
+	e.GET("/beforeDay", beforeDay)
 	e.Start(constant.HTTP_PORT)
 	fmt.Println("RunHttpServer -----------------")
 }
 
-func percentTen(c echo.Context) error {
+func beforeDay(c echo.Context) error {
 	c.Response().CloseNotify()
-	//code := c.QueryParam("code")
-	//money,_ := strconv.ParseFloat(c.QueryParam("money"), 64)
-	//day,_ := strconv.ParseFloat(c.QueryParam("day"), 64)
+	//code ,_:= strconv.Atoi(c.QueryParam("code"))
+	//
+	//beforeDay ,_:=strconv.Atoi(c.QueryParam("beforeDay"))
+
+	//menoy,_:=strconv.ParseFloat(c.QueryParam("momey"), 64)
+
+	code ,_:= strconv.Atoi("000539")
+
+	beforeDay ,_:=strconv.Atoi("100")
+
+	menoy,_:=strconv.ParseFloat("200000",64)
 
 
-
-
-
+	percentTen.Start(code,beforeDay,menoy)
+	//beforeStruct:= percentTen.NewBeforeDayStruct(code,beforeDay,menoy)
+	//beforeStruct.Do()
 
 	return  nil
 }

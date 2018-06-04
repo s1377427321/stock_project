@@ -2,9 +2,9 @@ package tactics
 
 import (
 	"encoding/json"
-	"fmt"
 	//	"sort"
 	"strconv"
+	."commo"
 )
 
 /*
@@ -23,11 +23,7 @@ http://120.79.154.53:4343/tactics1?code=600034&
 origPrice=10.23&bearLose=0.5&haveMoney=50000&divide=5
 */
 
-func Round64(f float64, n int) float64 {
-	floatStr := fmt.Sprintf("%."+strconv.Itoa(n)+"f", f)
-	inst, _ := strconv.ParseFloat(floatStr, 64)
-	return inst
-}
+
 
 type Grid struct {
 	Code      int `json:"code"`
