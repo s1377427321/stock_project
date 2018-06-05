@@ -39,9 +39,9 @@ func beforeDay(c echo.Context) error {
 
 	//menoy,_:=strconv.ParseFloat(c.QueryParam("momey"), 64)
 
-	code ,_:= strconv.Atoi("000539")
+	code ,_:= strconv.Atoi("002644") //0409
 
-	beforeDay ,_:=strconv.Atoi("100")
+	beforeDay ,_:=strconv.Atoi("39")
 
 	menoy,_:=strconv.ParseFloat("200000",64)
 

@@ -28,9 +28,6 @@ type BeforeDayStruct struct {
 	Idx int              //有多少个多余十分之一的个数
 }
 
-
-
-
 func (self *BeforeDayStruct)Do() {
 
 	//before := time.Unix(time.Now().Unix()-int64(3600*24*self.BeforeDay), 0).Format("2006-01-02")
@@ -112,13 +109,12 @@ func (self *BeforeDayStruct)Do() {
 
 
 	//func InsertResult(code int,start_day ,befor_day string,total_money ,one_money,remain_money,stock_money,stock_price,share_holding float64,strProcess string)  {
-	storage.InsertResult(self.Code,self.StartDay,self.BeforeDay,self.TotalMoney,self.OneMoney,self.RemainMoney,self.StockMoney,self.StockPrice,self.ShareHolding,self.ToStringTactics())
+	storage.InsertResult(self.Code,self.StartDay,self.BeforeDay,self.TotalMoney,self.OneMoney,self.RemainMoney,self.StockMoney,self.StockPrice,self.ShareHolding,self.ToStringTactics(),self.ToStringDataChanges())
 
 	//保存到数据库
-	fmt.Println(self.ToStringDataChanges())
+	//fmt.Println(self.ToStringDataChanges())
 	//fmt.Println(self.ToStringTactics())
 	fmt.Println("")
-
 }
 
 func (self *BeforeDayStruct)DealTransaction(record map[int]*DayTrade)  {
@@ -136,12 +132,12 @@ func (self *BeforeDayStruct)DealTransaction(record map[int]*DayTrade)  {
 
 			minPrice ,maxPrice :=self.GetMinMax(float64(v.Close),float64(v.High),float64(v.Low))
 			changDay = v.Date
-			for i:=self.Idx;i<len(self.StockTacticsOperate)+self.Idx;i++ {
-				if vv,ok := self.StockTacticsOperate[i];ok && vv!=nil{
+			for ii:=self.Idx;ii<len(self.StockTacticsOperate)+self.Idx;ii++ {
+				if vv,ok := self.StockTacticsOperate[ii];ok && vv!=nil{
 					nextVV:=vv.Next
 					if minPrice < vv.Sp.Price && maxPrice > vv.Sp.Price {
 						if nextVV !=nil && nextVV.IsBeBuy==true{           //卖出
-							//if maxPrice> vv.Price {  //卖出
+							//if maxPrice> vv.Price {  //卖出  34  48
 							self.StockPrice = vv.Sp.Price
 
 							self.ShareHolding = self.ShareHolding - nextVV.Sp.BuyShare
@@ -243,7 +239,7 @@ func (self *BeforeDayStruct)ToStringDataChanges() string  {
 
 func  Start(code ,beforeDay int,menoy float64)  {
 	beforeStruct:= NewBeforeDayStruct(code,beforeDay,menoy,-1)
-	beforeStruct.StockPrice = 4.3
+	//beforeStruct.StockPrice = 4.3
 	beforeStruct.Do()
 }
 

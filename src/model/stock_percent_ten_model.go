@@ -1,6 +1,9 @@
 package model
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 
 //百分比策略操作数据结构
@@ -55,7 +58,12 @@ type DataChanges []*DataChange
 func (p DataChanges) Len() int { return len(p) }
 
 func (p DataChanges) Less(i, j int) bool {
-	return p[i].StockPrice > p[j].StockPrice
+
+	timeLayout := "2006-01-02"
+	loc, _ := time.LoadLocation("Local")
+	pi, _ := time.ParseInLocation(timeLayout, p[i].Data, loc)
+	pj,_:=time.ParseInLocation(timeLayout,p[j].Data,loc)
+	return pi.Unix() < pj.Unix()
 }
 
 func (p DataChanges) Swap(i, j int) { p[i], p[j] = p[j], p[i] }
