@@ -24,6 +24,7 @@ type BeforeDayStruct struct {
 	ShareHolding float64 //持股的份额
 	//StockTactics map[int]*StockProcess  //股票里面的操作网格数据
 	StockTacticsOperate map[int]*StockTacticsOperate  //股票里面的操作网格数据
+	ChangeNums int
 	DataChanges DataChanges       //记录每次买入卖出
 	Idx int              //有多少个多余十分之一的个数
 }
@@ -109,7 +110,7 @@ func (self *BeforeDayStruct)Do() {
 
 
 	//func InsertResult(code int,start_day ,befor_day string,total_money ,one_money,remain_money,stock_money,stock_price,share_holding float64,strProcess string)  {
-	storage.InsertResult(self.Code,self.StartDay,self.BeforeDay,self.TotalMoney,self.OneMoney,self.RemainMoney,self.StockMoney,self.StockPrice,self.ShareHolding,self.ToStringTactics(),self.ToStringDataChanges())
+	storage.InsertResult(self.Code,self.StartDay,self.BeforeDay,self.TotalMoney,self.WinMoney,self.OneMoney,self.RemainMoney,self.StockMoney,self.StockPrice,self.ShareHolding,self.ToStringTactics(),self.ChangeNums,self.ToStringDataChanges())
 
 	//保存到数据库
 	//fmt.Println(self.ToStringDataChanges())
@@ -171,6 +172,7 @@ func (self *BeforeDayStruct)DealTransaction(record map[int]*DayTrade)  {
 			self.WinMoney = self.TotalMoney - self.OriginMoney
 
 			if isChange == true{
+				self.ChangeNums = self.ChangeNums +1
 				self.AddADataChanges(changDay,self.TotalMoney,self.WinMoney,self.RemainMoney,self.StockMoney,self.ShareHolding,self.StockPrice)
 			}
 
@@ -252,6 +254,7 @@ func NewBeforeDayStruct(code ,beforeDayNum int,momey float64,idx int)  *BeforeDa
 		TotalMoney:momey,
 		StockTacticsOperate:make(map[int]*StockTacticsOperate),
 		Idx:idx,
+		ChangeNums:0,
 		StockPrice:0,
 	}
 }

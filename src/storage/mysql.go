@@ -299,17 +299,25 @@ func UpSertStockInfo(stocks []*model.Stock) error {
 	if err != nil {
 		panic(err.Error())
 	}
+
+	begin, err := db.Begin()
+	if err != nil {
+		panic(err.Error())
+	}
+
 	defer stmt.Close()
 	for _, stock := range stocks {
 		if stock == nil {
 			continue
 		}
-		_, err = stmt.Exec(stock.Code, stock.CnName, stock.CnName)
+
+		_,err = begin.Stmt(stmt).Exec(stock.Code, stock.CnName, stock.CnName)
 		if err != nil {
 			panic(err.Error())
 		}
 	}
 	return nil
 }
+
 
 
