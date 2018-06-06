@@ -69,9 +69,9 @@ func beforeAllDay(c echo.Context) error  {
 	for _,v :=range stocks{
 
 		go doBeforeAllDay(v.Id,beforeDay,menoy,sem)
-
+		//<-sem
 		select {
-		case <-time.After(1*time.Second):
+		case <-time.After(5*time.Second):
 			fmt.Println("chao shi")
 		case <-sem:
 

@@ -60,3 +60,18 @@ func InsertResult(code int,start_day string ,befor_day int ,total_money ,win_mon
 		panic(err.Error())
 	}
 }
+
+func GetLatestBeforeDay()  {
+	sqlstr:=`
+		select code,start_day,befor_day,total_money,win_money,one_money,remain_money,stock_money,stock_price,share_holding,stactics,processesNum,processes,processesWin,upDataTime FROM befor_day WHERE code=?
+	`
+	stmt,err:=db.Prepare(sqlstr)
+
+	if err != nil{
+		panic(err.Error())
+	}
+
+	defer stmt.Close()
+
+
+}
