@@ -65,6 +65,7 @@ func beforeAllDay(c echo.Context) error {
 	beforeDay, _ := strconv.Atoi("100")
 	menoy, _ := strconv.ParseFloat("200000", 64)
 	sem := make(chan int)
+<<<<<<< HEAD
 	for _, v := range stocks {
 
 		go doBeforeAllDay(v.Id, beforeDay, menoy, sem)
@@ -73,6 +74,16 @@ func beforeAllDay(c echo.Context) error {
 		//	case <-time.After(1*time.Second):
 		//		fmt.Println("chao shi")
 		//	case <-sem:
+=======
+	for _,v :=range stocks{
+
+		go doBeforeAllDay(v.Id,beforeDay,menoy,sem)
+		//<-sem
+		select {
+		case <-time.After(5*time.Second):
+			fmt.Println("chao shi")
+		case <-sem:
+>>>>>>> 0f401d774c9b3a0147acf3b6a0c1be2fbba74006
 
 		//		}
 	}
