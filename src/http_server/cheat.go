@@ -8,11 +8,11 @@ import (
 	"github.com/labstack/echo/middleware"
 	"net/http"
 	//	"sort"
+	"storage"
 	"strconv"
 	"tactics"
 	"tactics/percentTen"
-	"storage"
-	"time"
+	//"time"
 )
 
 type H map[string]interface{}
@@ -29,7 +29,7 @@ func RunHttpServer() {
 	e.GET("/test", test)
 	e.GET("/tactics1", tactics1)
 	e.GET("/beforeDay", beforeDay)
-	e.GET("/beforeAllDay",beforeAllDay)
+	e.GET("/beforeAllDay", beforeAllDay)
 	e.Start(constant.HTTP_PORT)
 	fmt.Println("RunHttpServer -----------------")
 }
@@ -42,54 +42,53 @@ func beforeDay(c echo.Context) error {
 
 	//menoy,_:=strconv.ParseFloat(c.QueryParam("momey"), 64)
 
-	code ,_:= strconv.Atoi("603878") //0409
+	code, _ := strconv.Atoi("603878") //0409
 
-	beforeDay ,_:=strconv.Atoi("100")
+	beforeDay, _ := strconv.Atoi("100")
 
-	menoy,_:=strconv.ParseFloat("200000",64)
+	menoy, _ := strconv.ParseFloat("200000", 64)
 
-
-	percentTen.Start(code,beforeDay,menoy)
+	percentTen.Start(code, beforeDay, menoy)
 	//beforeStruct:= percentTen.NewBeforeDayStruct(code,beforeDay,menoy)
 	//beforeStruct.Do()
 
-	return  nil
+	return nil
 }
 
-func beforeAllDay(c echo.Context) error  {
+func beforeAllDay(c echo.Context) error {
 	c.Response().CloseNotify()
 
-	stocks:= storage.GetAllStocks()
+	stocks := storage.GetAllStocks()
 
 	//beforeDay ,_:=strconv.Atoi(c.QueryParam("beforeDay"))
 	//menoy,_:=strconv.ParseFloat(c.QueryParam("momey"), 64)
-	beforeDay ,_:=strconv.Atoi("100")
-	menoy,_:=strconv.ParseFloat("200000",64)
+	beforeDay, _ := strconv.Atoi("100")
+	menoy, _ := strconv.ParseFloat("200000", 64)
 	sem := make(chan int)
-	for _,v :=range stocks{
+	for _, v := range stocks {
 
-		go doBeforeAllDay(v.Id,beforeDay,menoy,sem)
+		go doBeforeAllDay(v.Id, beforeDay, menoy, sem)
+		<-sem
+		//	select {
+		//	case <-time.After(1*time.Second):
+		//		fmt.Println("chao shi")
+		//	case <-sem:
 
-		select {
-		case <-time.After(1*time.Second):
-			fmt.Println("chao shi")
-		case <-sem:
-
-		}
+		//		}
 	}
 
 	return nil
 }
 
-func doBeforeAllDay(id,beforeDay int,menoy float64,sem chan int)  {
-	percentTen.Start(id,beforeDay,menoy)
+func doBeforeAllDay(id, beforeDay int, menoy float64, sem chan int) {
+	percentTen.Start(id, beforeDay, menoy)
 	fmt.Println("-----doBeforeAllDay--------")
-	sem<-1
+	sem <- 1
 }
 
 func tactics1(c echo.Context) error {
 	c.Response().CloseNotify()
-	code ,_:= strconv.Atoi(c.QueryParam("code"))
+	code, _ := strconv.Atoi(c.QueryParam("code"))
 	origPrice, _ := strconv.ParseFloat(c.QueryParam("origPrice"), 64)
 	bearLose, _ := strconv.ParseFloat(c.QueryParam("bearLose"), 64)
 	haveMoney, _ := strconv.ParseFloat(c.QueryParam("haveMoney"), 64)
