@@ -233,7 +233,7 @@ func GetLatestDayStock(stock *model.Stock) *model.DayTrade {
 
 func GetAllStocks() []*model.Stock {
 	sql := `
-		SELECT code, cn_name FROM stock
+		SELECT id , code, cn_name FROM stock
 	`
 	stmt, err := db.Prepare(sql)
 	if err != nil {
@@ -247,7 +247,7 @@ func GetAllStocks() []*model.Stock {
 	stocks := make([]*model.Stock, 0)
 	for rows.Next() {
 		stock := &model.Stock{}
-		err = rows.Scan(&stock.Code, &stock.CnName)
+		err = rows.Scan(&stock.Id,&stock.Code, &stock.CnName)
 		if err != nil {
 			return nil
 		}
@@ -284,15 +284,19 @@ func UpSertStockInfo(stocks []*model.Stock) error {
 	sql := `
 	INSERT INTO stock
 	(
+		id,
 		code,
 		cn_name
 	)
 	VALUES
 	(
 		?,
+		?,
 		?
 	)
 	ON DUPLICATE KEY UPDATE
+	id=?,
+	code = ?,
 	cn_name = ?
 	`
 	stmt, err := db.Prepare(sql)
@@ -310,14 +314,23 @@ func UpSertStockInfo(stocks []*model.Stock) error {
 		if stock == nil {
 			continue
 		}
-
-		_,err = begin.Stmt(stmt).Exec(stock.Code, stock.CnName, stock.CnName)
+		_,err = begin.Stmt(stmt).Exec(stock.Id, stock.Code, stock.CnName,stock.Id,stock.Code, stock.CnName)
 		if err != nil {
 			panic(err.Error())
 		}
 	}
+
+	err = begin.Commit()
+	if err != nil {
+		panic(err.Error())
+	}
+
+	fmt.Println("------UpSertStockInfo  end--------------")
+
 	return nil
 }
+
+
 
 
 

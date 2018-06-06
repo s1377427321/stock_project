@@ -6,7 +6,7 @@ import (
 )
 
 func InsertResult(code int,start_day string ,befor_day int ,total_money ,win_money,one_money,remain_money,stock_money,stock_price,share_holding float64,
-	strStactics string ,processNum int,strProcess string )  {
+	strStactics string ,processNum int ,processesWin float64,upDataTime string,strProcess string )  {
 	sqlString:=`
 	INSERT INTO befor_day
 	(
@@ -22,8 +22,12 @@ func InsertResult(code int,start_day string ,befor_day int ,total_money ,win_mon
 		share_holding,
 		stactics,
 		processesNum,
-		processes
+		processes,
+		processesWin,
+		upDataTime
 	) VALUES (
+		?,
+		?,
 		?,
 		?,
 		?,
@@ -39,7 +43,8 @@ func InsertResult(code int,start_day string ,befor_day int ,total_money ,win_mon
 		?
 	) 
 	ON DUPLICATE KEY UPDATE 
-	start_day=?,befor_day=?,total_money=?,win_money=?,one_money=?,remain_money=?,stock_money=?,stock_price=?,share_holding=?,stactics=?,processesNum=?,processes=?
+	start_day=?,befor_day=?,total_money=?,win_money=?,one_money=?,remain_money=?,stock_money=?,stock_price=?,share_holding=?,stactics=?,processesNum=?,processes=?,
+	processesWin=?,upDataTime=?
 `
 //,befor_day,total_money,one_money,remain_money,stock_money,stock_price,share_holding,processes`
 	//INSERT INTO pro_realtimeprice_rank (id, id_s, plat,d_m) VALUES (1, '5445', '5454', 5) ON DUPLICATE KEY UPDATE d_m=d_m+5;
@@ -49,8 +54,8 @@ func InsertResult(code int,start_day string ,befor_day int ,total_money ,win_mon
 	}
 	defer stmt.Close()
 
-	_, err = stmt.Exec(code,start_day,befor_day,total_money,win_money,one_money,remain_money,stock_money,stock_price,share_holding,strStactics,processNum,strProcess,
-		start_day,befor_day,total_money,win_money,one_money,remain_money,stock_money,stock_price,share_holding,strStactics,processNum,strProcess)
+	_, err = stmt.Exec(code,start_day,befor_day,total_money,win_money,one_money,remain_money,stock_money,stock_price,share_holding,strStactics,processNum,strProcess,processesWin,upDataTime,
+		start_day,befor_day,total_money,win_money,one_money,remain_money,stock_money,stock_price,share_holding,strStactics,processNum,strProcess,processesWin,upDataTime)
 	if err != nil {
 		panic(err.Error())
 	}

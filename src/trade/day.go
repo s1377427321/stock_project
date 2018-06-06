@@ -49,6 +49,10 @@ func (this *DayTradeHelper) Update(stock *model.Stock) {
 
 	storage.InsertTradeHis(added)
 	log.Println("add ", stock.Code, " days trade info")
+	//
+	//rand:=rand.Int63n(5)
+	//rand=rand*1*int64(time.Second)
+	//time.Sleep(time.Duration(rand))
 }
 
 func (this *DayTradeHelper) getTrade(stock *model.Stock, begin string, end string) []*model.DayTrade {

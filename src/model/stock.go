@@ -18,6 +18,7 @@ const (
 )
 
 type Stock struct {
+	Id     int
 	CnName string
 	PyName string
 	Code   string

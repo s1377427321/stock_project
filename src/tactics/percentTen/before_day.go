@@ -24,7 +24,9 @@ type BeforeDayStruct struct {
 	ShareHolding float64 //持股的份额
 	//StockTactics map[int]*StockProcess  //股票里面的操作网格数据
 	StockTacticsOperate map[int]*StockTacticsOperate  //股票里面的操作网格数据
-	ChangeNums int
+	TacticsWin float64    //执行策略挣的钱
+	UpdateDay  string    //最新追踪时间
+	ChangeNums int		//执行策略次数
 	DataChanges DataChanges       //记录每次买入卖出
 	Idx int              //有多少个多余十分之一的个数
 }
@@ -90,7 +92,7 @@ func (self *BeforeDayStruct)Do() {
 			self.StockTacticsOperate[i] = temp01
 
 			if i != self.Idx {
-				//self.StockTactics[i-1].SellShare = temp01.BuyShare
+				self.StockTacticsOperate[i-1].Sp.SellShare = temp01.Sp.BuyShare
 				self.StockTacticsOperate[i-1].Next = temp01
 			}else{
 				self.StockTacticsOperate[i].Next = nil
@@ -101,6 +103,8 @@ func (self *BeforeDayStruct)Do() {
 
 		}
 
+		self.AddADataChanges(self.StartDay,self.TotalMoney,self.WinMoney,self.RemainMoney,self.StockMoney,self.ShareHolding,self.StockPrice)
+
 	}else {
 		panic("没有发现key")
 	}
@@ -110,7 +114,7 @@ func (self *BeforeDayStruct)Do() {
 
 
 	//func InsertResult(code int,start_day ,befor_day string,total_money ,one_money,remain_money,stock_money,stock_price,share_holding float64,strProcess string)  {
-	storage.InsertResult(self.Code,self.StartDay,self.BeforeDay,self.TotalMoney,self.WinMoney,self.OneMoney,self.RemainMoney,self.StockMoney,self.StockPrice,self.ShareHolding,self.ToStringTactics(),self.ChangeNums,self.ToStringDataChanges())
+	storage.InsertResult(self.Code,self.StartDay,self.BeforeDay,self.TotalMoney,self.WinMoney,self.OneMoney,self.RemainMoney,self.StockMoney,self.StockPrice,self.ShareHolding,self.ToStringTactics(),self.ChangeNums,self.TacticsWin,self.UpdateDay,self.ToStringDataChanges())
 
 	//保存到数据库
 	//fmt.Println(self.ToStringDataChanges())
@@ -142,7 +146,8 @@ func (self *BeforeDayStruct)DealTransaction(record map[int]*DayTrade)  {
 							self.StockPrice = vv.Sp.Price
 
 							self.ShareHolding = self.ShareHolding - nextVV.Sp.BuyShare
-							self.RemainMoney = self.RemainMoney + Round64(nextVV.Sp.BuyShare * vv.Sp.Price,1)
+							self.TacticsWin = self.TacticsWin+Round64(nextVV.Sp.BuyShare * (vv.Sp.Price-nextVV.Sp.Price),1)
+							self.RemainMoney = self.RemainMoney + Round64(vv.Sp.Price* nextVV.Sp.BuyShare,1)
 							nextVV.IsBeBuy = false
 							//vv.isBeBuy = false
 							//isEnd = true
@@ -175,11 +180,12 @@ func (self *BeforeDayStruct)DealTransaction(record map[int]*DayTrade)  {
 				self.ChangeNums = self.ChangeNums +1
 				self.AddADataChanges(changDay,self.TotalMoney,self.WinMoney,self.RemainMoney,self.StockMoney,self.ShareHolding,self.StockPrice)
 			}
-
+			self.UpdateDay=v.Date
 		}else {
 			panic("key value error")
+			self.UpdateDay = ""
 		}
-		
+
 	}
 }
 
@@ -196,7 +202,7 @@ func (self *BeforeDayStruct)ToStringTactics() string{
 	var outString string=""
 	for i:=self.Idx;i<len(self.StockTacticsOperate)+self.Idx;i++{
 		if v,ok := self.StockTacticsOperate[i];ok && v!=nil{
-			outString =outString+ self.StockTacticsOperate[i].Sp.ToString() +"\n"
+			outString =outString + ","+ self.StockTacticsOperate[i].Sp.ToString()
 		}else {
 			panic("key value error")
 		}
@@ -204,18 +210,6 @@ func (self *BeforeDayStruct)ToStringTactics() string{
 	return outString
 }
 
-/*
-type DataChanges struct {
-	Data string       //时间
-	TotalMoney float64  //所以的钱
-	WinMoney float64 //赢了多少钱
-	RemainMoney float64  //没有买股票的钱
-	StockMoney float64  //持股的钱
-	ShareHolding float64 //持股的份额
-	StockPrice float64  //持股的价格
-}
-
- */
 func (self *BeforeDayStruct)AddADataChanges(data string,totalM,winM,remainM,staockM,shareH,stockP float64)  {
 	temp:=&DataChange{
 		Data:data,
@@ -233,14 +227,14 @@ func (self *BeforeDayStruct)ToStringDataChanges() string  {
 	sort.Sort(self.DataChanges)
 	var outString string=""
 	for _,v:=range self.DataChanges{
-		outString = outString+v.ToString()
+		outString = outString+","+v.ToString()
 	}
 	return  outString
 }
 
 
 func  Start(code ,beforeDay int,menoy float64)  {
-	beforeStruct:= NewBeforeDayStruct(code,beforeDay,menoy,-1)
+	beforeStruct:= NewBeforeDayStruct(code,beforeDay,menoy,-5)
 	//beforeStruct.StockPrice = 4.3
 	beforeStruct.Do()
 }
@@ -256,6 +250,7 @@ func NewBeforeDayStruct(code ,beforeDayNum int,momey float64,idx int)  *BeforeDa
 		Idx:idx,
 		ChangeNums:0,
 		StockPrice:0,
+		TacticsWin:0,
 	}
 }
 

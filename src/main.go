@@ -14,7 +14,7 @@ import (
 func update(helper *trade.DayTradeHelper, stock *model.Stock,sem chan int) {
 	log.Println(stock.Code)
 	helper.Update(stock)
-	<-sem
+	sem<-0
 }
 
 func dailyTradeUpdate() {
@@ -30,8 +30,15 @@ func dailyTradeUpdate() {
 			stock.Type == model.CHUANGYE ||
 			stock.Type == model.ZHONG_XIAO {
 
-			sem <- 1
 			go update(helper, stock, sem)
+			//<-sem
+			select {
+			case <-time.After(1*time.Second):
+				fmt.Println("========do time.After(1) ======")
+				//delete(sem,chan)
+			case <-sem:
+				fmt.Println("========do self <-sem======")
+			}
 		}
 	}
 
@@ -54,6 +61,12 @@ func dailyTradeUpdate() {
 
 }
 
+func dailyAllStockUpdate() {
+	all := stock.NewAllStock()
+	all.UpdateFromApi()
+	all.UpdateStorage()
+}
+
 func main() {
 	boolServer := flag.Bool("web", false, "start up a webserver to query stocks info")
 	boolTrade := flag.Bool("dailyTrade", false, "update day trade info")
@@ -67,7 +80,7 @@ func main() {
 		log.Println("bbbbbbbbbbbbbbb")
 	} else if *boolStock {
 		log.Println("cccccccccccccccc")
-		//	dailyAllStockUpdate()
+		dailyAllStockUpdate()
 	} else {
 		fmt.Println("error input, use --help shows cmd")
 	}

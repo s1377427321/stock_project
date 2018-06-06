@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"tactics"
 	"tactics/percentTen"
+	"storage"
+	"time"
 )
 
 type H map[string]interface{}
@@ -27,6 +29,7 @@ func RunHttpServer() {
 	e.GET("/test", test)
 	e.GET("/tactics1", tactics1)
 	e.GET("/beforeDay", beforeDay)
+	e.GET("/beforeAllDay",beforeAllDay)
 	e.Start(constant.HTTP_PORT)
 	fmt.Println("RunHttpServer -----------------")
 }
@@ -51,6 +54,37 @@ func beforeDay(c echo.Context) error {
 	//beforeStruct.Do()
 
 	return  nil
+}
+
+func beforeAllDay(c echo.Context) error  {
+	c.Response().CloseNotify()
+
+	stocks:= storage.GetAllStocks()
+
+	//beforeDay ,_:=strconv.Atoi(c.QueryParam("beforeDay"))
+	//menoy,_:=strconv.ParseFloat(c.QueryParam("momey"), 64)
+	beforeDay ,_:=strconv.Atoi("100")
+	menoy,_:=strconv.ParseFloat("200000",64)
+	sem := make(chan int)
+	for _,v :=range stocks{
+
+		go doBeforeAllDay(v.Id,beforeDay,menoy,sem)
+
+		select {
+		case <-time.After(1*time.Second):
+			fmt.Println("chao shi")
+		case <-sem:
+
+		}
+	}
+
+	return nil
+}
+
+func doBeforeAllDay(id,beforeDay int,menoy float64,sem chan int)  {
+	percentTen.Start(id,beforeDay,menoy)
+	fmt.Println("-----doBeforeAllDay--------")
+	sem<-1
 }
 
 func tactics1(c echo.Context) error {

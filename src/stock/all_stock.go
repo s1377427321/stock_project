@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"regexp"
 	"time"
+	"storage"
+	"strconv"
 )
 
 type AllStock struct {
@@ -47,7 +49,9 @@ func GetAllStock() (map[string]*model.Stock, error) {
 	matches := reg.FindAllStringSubmatch(string(body), -1)
 	stocks := make(map[string]*model.Stock)
 	for _, m := range matches {
+		id,_:=strconv.Atoi(m[1])
 		s := &model.Stock{
+			Id:id,
 			Code:   m[1],
 			CnName: m[2],
 			PyName: m[3],
@@ -57,4 +61,14 @@ func GetAllStock() (map[string]*model.Stock, error) {
 	}
 	return stocks, nil
 
+}
+
+func (this *AllStock) UpdateStorage() {
+	s := make([]*model.Stock, len(this.Stocks))
+	i := 0
+	for _, v := range this.Stocks {
+		s[i] = v
+		i += 1
+	}
+	storage.UpSertStockInfo(s)
 }
