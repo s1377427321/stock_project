@@ -70,7 +70,7 @@ func dailyAllStockUpdate() {
 func main() {
 	boolServer := flag.Bool("web", false, "start up a webserver to query stocks info")
 	boolTrade := flag.Bool("dailyTrade", false, "update day trade info")
-	boolStock := flag.Bool("dailyStock", true, "update stock code->name info")
+	boolStock := flag.Bool("dailyStock", false, "update stock code->name info")
 	flag.Parse()
 	if *boolServer {
 		log.Println("aaaaaaaaaaaaa")

@@ -1,12 +1,12 @@
 package storage
 
 import (
-	"database/sql"
-	_ "github.com/go-sql-driver/mysql"
 	"model"
 	"fmt"
 	"constant"
 	"log"
+	"database/sql"
+	_ "github.com/go-sql-driver/mysql"
 )
 
 var db = NewMysql()
@@ -18,6 +18,11 @@ func NewMysql() *sql.DB {
 	if err != nil {
 		panic(err.Error())
 	}
+
+	db.SetMaxOpenConns(2000)
+
+	db.SetMaxIdleConns(1000)
+
 	return db
 }
 
@@ -182,7 +187,7 @@ func GetLatestSomeDataFromDay(code ,dayNum int) map[string]*model.DayTrade  {
 		}
 		days[day.Date] = day
 	}
-
+	log.Println("-----return--------GetLatestSomeDataFromDay----------------")
 	return days
 }
 
@@ -329,7 +334,6 @@ func UpSertStockInfo(stocks []*model.Stock) error {
 
 	return nil
 }
-
 
 
 

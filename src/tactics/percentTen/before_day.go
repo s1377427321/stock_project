@@ -2,43 +2,35 @@ package percentTen
 
 import (
 	"time"
-	"storage"
 	."model"
 	"math"
 	"fmt"
 	."commo"
-	"sort"
+	"storage"
+	"log"
 )
 
-type BeforeDayStruct struct {
-	Code int         //代码
-	StartDay string   //开始时间
-	BeforeDay int     //向前多少天开始测试
-	OriginMoney float64  //原始的钱
-	TotalMoney float64  //所有的钱
-	WinMoney float64   //赢的钱
-	OneMoney float64    //十分之一的钱
-	RemainMoney float64  //没有买股票的钱
-	StockMoney float64  //持股的钱
-	StockPrice float64  //持股的价格
-	ShareHolding float64 //持股的份额
-	//StockTactics map[int]*StockProcess  //股票里面的操作网格数据
-	StockTacticsOperate map[int]*StockTacticsOperate  //股票里面的操作网格数据
-	TacticsWin float64    //执行策略挣的钱
-	UpdateDay  string    //最新追踪时间
-	ChangeNums int		//执行策略次数
-	DataChanges DataChanges       //记录每次买入卖出
-	Idx int              //有多少个多余十分之一的个数
-}
-
-func (self *BeforeDayStruct)Do() {
+func Do(self *BeforeDayStruct) {
 
 	//before := time.Unix(time.Now().Unix()-int64(3600*24*self.BeforeDay), 0).Format("2006-01-02")
 
-	data := storage.GetLatestSomeDataFromDay(self.Code,self.BeforeDay)
+	data :=storage.GetLatestSomeDataFromDay(self.Code,self.BeforeDay) //GetLatestSomeDataFromDay(self.Code,self.BeforeDay) // storage.GetLatestSomeDataFromDay(self.Code,self.BeforeDay)
 	record:=make(map[int]*DayTrade)
 	var j int = 0
-	for i:=0;i<self.BeforeDay ; {
+	log.Println("---------begin do for-----------")
+	log.Println(len(data))
+
+	if len(data) < self.BeforeDay {
+		self.BeforeDay = len(data)
+	}
+
+
+	if  self.BeforeDay == 0{
+		return
+	}
+
+
+	for i:=0;i<self.BeforeDay  ; {
 		dayKey:=time.Unix(time.Now().Unix() - int64(3600*24*j),0).Format("2006-01-02")
 		if v,ok:= data[dayKey]; v !=nil && ok {
 			record[self.BeforeDay-i] = v
@@ -50,6 +42,7 @@ func (self *BeforeDayStruct)Do() {
 		j++
 	}
 
+	log.Println("---------end do for-----------")
 	self.OneMoney =self.TotalMoney*0.1
 
 	if v,ok:=record[1];ok && v!=nil{
@@ -109,20 +102,28 @@ func (self *BeforeDayStruct)Do() {
 		panic("没有发现key")
 	}
 
-	self.DealTransaction(record)
+	DealTransaction(self,record)
 
 
 
 	//func InsertResult(code int,start_day ,befor_day string,total_money ,one_money,remain_money,stock_money,stock_price,share_holding float64,strProcess string)  {
-	storage.InsertResult(self.Code,self.StartDay,self.BeforeDay,self.TotalMoney,self.WinMoney,self.OneMoney,self.RemainMoney,self.StockMoney,self.StockPrice,self.ShareHolding,self.ToStringTactics(),self.ChangeNums,self.TacticsWin,self.UpdateDay,self.ToStringDataChanges())
+	self.Tactics =self.ToStringTactics()
+	self.TacticsChange = self.ToStringDataChanges()
+	log.Println("-------- storage.InsertResult --------------------")
+	log.Println(self.TacticsWin)
+	storage.InsertResult(self.Code,self.StartDay,self.BeforeDay,self.TotalMoney,self.WinMoney,self.OneMoney,self.RemainMoney,self.StockMoney,self.StockPrice,
+		self.ShareHolding,self.Tactics,self.DoTacticsNums,self.TacticsWin,self.TacticsChange,self.UpdateDay)
 
+	log.Println("-------- storage.InsertResult  end--------------------")
+	//storage.InsertResult(self)
 	//保存到数据库
 	//fmt.Println(self.ToStringDataChanges())
 	//fmt.Println(self.ToStringTactics())
 	fmt.Println("")
 }
 
-func (self *BeforeDayStruct)DealTransaction(record map[int]*DayTrade)  {
+func DealTransaction(self *BeforeDayStruct,record map[int]*DayTrade)  {
+	log.Println("-------- DealTransaction --------------------")
 	for i:=1;i<=self.BeforeDay ; i++ {
 
 		//isEnd :=false
@@ -130,12 +131,12 @@ func (self *BeforeDayStruct)DealTransaction(record map[int]*DayTrade)  {
 		changDay := ""
 		if v,ok := record[i];ok && v!=nil{
 
-			fmt.Println("------------------------------------")
-			fmt.Println(v.Low,"  ",v.High,"  ",v.Close)
-			fmt.Println("------------end------------------------")
-			fmt.Println("")
+			//fmt.Println("------------------------------------")
+			//fmt.Println(v.Low,"  ",v.High,"  ",v.Close)
+			//fmt.Println("------------end------------------------")
+			//fmt.Println("")
 
-			minPrice ,maxPrice :=self.GetMinMax(float64(v.Close),float64(v.High),float64(v.Low))
+			minPrice ,maxPrice :=GetMinMax(float64(v.Close),float64(v.High),float64(v.Low))
 			changDay = v.Date
 			for ii:=self.Idx;ii<len(self.StockTacticsOperate)+self.Idx;ii++ {
 				if vv,ok := self.StockTacticsOperate[ii];ok && vv!=nil{
@@ -177,7 +178,7 @@ func (self *BeforeDayStruct)DealTransaction(record map[int]*DayTrade)  {
 			self.WinMoney = self.TotalMoney - self.OriginMoney
 
 			if isChange == true{
-				self.ChangeNums = self.ChangeNums +1
+				self.DoTacticsNums = self.DoTacticsNums +1
 				self.AddADataChanges(changDay,self.TotalMoney,self.WinMoney,self.RemainMoney,self.StockMoney,self.ShareHolding,self.StockPrice)
 			}
 			self.UpdateDay=v.Date
@@ -189,56 +190,42 @@ func (self *BeforeDayStruct)DealTransaction(record map[int]*DayTrade)  {
 	}
 }
 
-
-func (self *BeforeDayStruct)GetMinMax(a,b,c float64) (aret float64 , bret float64) {
-	temp:=[]float64{a,b,c}
-
-	sort.Float64s(temp)
-
-	return temp[0],temp[len(temp)-1]
-}
-
-func (self *BeforeDayStruct)ToStringTactics() string{
-	var outString string=""
-	for i:=self.Idx;i<len(self.StockTacticsOperate)+self.Idx;i++{
-		if v,ok := self.StockTacticsOperate[i];ok && v!=nil{
-			outString =outString + ","+ self.StockTacticsOperate[i].Sp.ToString()
-		}else {
-			panic("key value error")
-		}
-	}
-	return outString
-}
-
-func (self *BeforeDayStruct)AddADataChanges(data string,totalM,winM,remainM,staockM,shareH,stockP float64)  {
-	temp:=&DataChange{
-		Data:data,
-		TotalMoney:totalM,
-		WinMoney:winM,
-		RemainMoney:remainM,
-		StockMoney:staockM,
-		ShareHolding:shareH,
-		StockPrice:stockP,
-	}
-	self.DataChanges = append(self.DataChanges,temp)
-}
-
-func (self *BeforeDayStruct)ToStringDataChanges() string  {
-	sort.Sort(self.DataChanges)
-	var outString string=""
-	for _,v:=range self.DataChanges{
-		outString = outString+","+v.ToString()
-	}
-	return  outString
-}
-
-
 func  Start(code ,beforeDay int,menoy float64)  {
 	beforeStruct:= NewBeforeDayStruct(code,beforeDay,menoy,-5)
 	//beforeStruct.StockPrice = 4.3
-	beforeStruct.Do()
+	Do(beforeStruct)
 }
 
+
+
+func StartForAll(code,beforDay int ,menoy float64)  {
+	//首先获取现有数据库里面有没有这条记录
+	//如果有，则填充BeforeDayStruct数据，然后再更新到最新一天股价操作
+	//如果没有，直接新建一个BeforeDayStruct数据 ，重新执行
+
+
+}
+
+func BeforeAllDay(beforeDay int,menoy float64)  {
+	sem := make(chan int)
+	stocks := storage.GetAllStocks()
+	for _,v :=range stocks{
+		log.Println(v)
+		go doBeforeAllDay(v.Id,beforeDay,menoy,sem)
+		//<-sem
+		select {
+		case <-time.After(5*time.Second):
+			fmt.Println("chao shi")
+		case <-sem:
+		}
+	}
+}
+
+func doBeforeAllDay(id, beforeDay int, menoy float64, sem chan int) {
+	Start(id, beforeDay, menoy)
+	fmt.Println("-----doBeforeAllDay--------")
+	sem <- 1
+}
 
 func NewBeforeDayStruct(code ,beforeDayNum int,momey float64,idx int)  *BeforeDayStruct {
 	return &BeforeDayStruct{
@@ -248,7 +235,7 @@ func NewBeforeDayStruct(code ,beforeDayNum int,momey float64,idx int)  *BeforeDa
 		TotalMoney:momey,
 		StockTacticsOperate:make(map[int]*StockTacticsOperate),
 		Idx:idx,
-		ChangeNums:0,
+		DoTacticsNums:0,
 		StockPrice:0,
 		TacticsWin:0,
 	}
