@@ -61,7 +61,7 @@ func beforeAllDay(c echo.Context) error {
 
 	//beforeDay ,_:=strconv.Atoi(c.QueryParam("beforeDay"))
 	//menoy,_:=strconv.ParseFloat(c.QueryParam("momey"), 64)
-	beforeDay, _ := strconv.Atoi("100")
+	beforeDay, _ := strconv.Atoi("30")
 	menoy, _ := strconv.ParseFloat("200000", 64)
 
 	percentTen.BeforeAllDay(beforeDay,menoy)

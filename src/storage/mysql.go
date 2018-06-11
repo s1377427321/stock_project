@@ -4,7 +4,6 @@ import (
 	"model"
 	"fmt"
 	"constant"
-	"log"
 	"database/sql"
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -60,6 +59,8 @@ func InsertTradeHis(days []*model.DayTrade) error {
 		panic(err.Error())
 	}
 
+	defer begin.Rollback()
+
 
 	defer stmt.Close()
 
@@ -69,7 +70,7 @@ func InsertTradeHis(days []*model.DayTrade) error {
 		if day == nil {
 			continue
 		}
-		log.Println(day)
+		//log.Println(day)
 
 		_, err :=begin.Stmt(stmt).Exec(day.Code, day.Date,
 			day.Open, day.Close, day.High, day.Low,
@@ -140,56 +141,7 @@ func GetTradeHis(stock *model.Stock, begin string, end string) []*model.DayTrade
 	return days
 }
 
-func GetLatestSomeDataFromDay(code ,dayNum int) map[string]*model.DayTrade  {
-	sql:=`
-	SELECT 
-		code, 
-		date,
-		open,
-		close,
-		high,
-		low,
-		volume,
-		money
-	FROM trade_his
-	WHERE code = ?
-	ORDER BY date DESC
-	LIMIT ?
-	`
-	stmt, err := db.Prepare(sql)
 
-	if err != nil {
-		panic(err.Error())
-	}
-	defer stmt.Close()
-
-	days :=  make(map[string]*model.DayTrade,1)
-	rows,err := stmt.Query(code,dayNum)
-
-	if err != nil {
-		panic(err.Error())
-	}
-
-	for rows.Next() {
-		day := &model.DayTrade{}
-		err = rows.Scan(
-			&day.Code,
-			&day.Date,
-			&day.Open,
-			&day.Close,
-			&day.High,
-			&day.Low,
-			&day.Volume,
-			&day.Money,
-		)
-		if err != nil {
-			return nil
-		}
-		days[day.Date] = day
-	}
-	log.Println("-----return--------GetLatestSomeDataFromDay----------------")
-	return days
-}
 
 /**
  * 某只股票最新一天的交易数据
@@ -313,7 +265,7 @@ func UpSertStockInfo(stocks []*model.Stock) error {
 	if err != nil {
 		panic(err.Error())
 	}
-
+	defer begin.Rollback()
 	defer stmt.Close()
 	for _, stock := range stocks {
 		if stock == nil {

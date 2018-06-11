@@ -1,8 +1,25 @@
 package storage
 
+import (
+	"model"
+	"sync"
+)
 
-func InsertResult(code int,start_day string ,befor_day int ,total_money ,win_money,one_money,remain_money,stock_money,stock_price,share_holding float64,
-	tactics string ,do_tactics_num int ,tactics_win float64,tactics_change string,updata_time string )  {
+var befor_day_sql_lock *sync.Mutex = &sync.Mutex{}
+
+var allInsertDayStruct []*model.BeforeDayStruct=make([]*model.BeforeDayStruct,0)
+
+func AddInsertDay(day *model.BeforeDayStruct)  {
+	befor_day_sql_lock.Lock()
+	allInsertDayStruct=append(allInsertDayStruct,day)
+	befor_day_sql_lock.Unlock()
+}
+
+func InsertAll()  {
+	if len(allInsertDayStruct) == 0 {
+		return
+	}
+
 	sqlString:=`
 	INSERT INTO befor_day
 	(
@@ -42,19 +59,106 @@ func InsertResult(code int,start_day string ,befor_day int ,total_money ,win_mon
 	start_day=?,befor_day=?,total_money=?,win_money=?,one_money=?,remain_money=?,stock_money=?,stock_price=?,share_holding=?,tactics=?,do_tactics_num=?,
 	tactics_win=?,tactics_change=?,updata_time=?
 `
-	//,befor_day,total_money,one_money,remain_money,stock_money,stock_price,share_holding,processes`
-	//INSERT INTO pro_realtimeprice_rank (id, id_s, plat,d_m) VALUES (1, '5445', '5454', 5) ON DUPLICATE KEY UPDATE d_m=d_m+5;
 	stmt, err := db.Prepare(sqlString)
 	if err != nil {
 		panic(err.Error())
 	}
 	defer stmt.Close()
 
-	_, err = stmt.Exec(code,start_day,befor_day,total_money,win_money,one_money,remain_money,stock_money,stock_price,share_holding,tactics,do_tactics_num,tactics_win,tactics_change,updata_time,
-		start_day,befor_day,total_money,win_money,one_money,remain_money,stock_money,stock_price,share_holding,tactics,do_tactics_num,tactics_win,tactics_change,updata_time)
+	begin, err := db.Begin()
 	if err != nil {
 		panic(err.Error())
 	}
+
+	defer begin.Rollback()
+
+	for _, dayStruct := range allInsertDayStruct {
+		if dayStruct == nil {
+			continue
+		}
+
+		_, err :=begin.Stmt(stmt).Exec(dayStruct.Code,dayStruct.StartDay,dayStruct.BeforeDay,dayStruct.TotalMoney,dayStruct.WinMoney,dayStruct.OneMoney,dayStruct.RemainMoney,dayStruct.StockMoney,dayStruct.StockPrice,dayStruct.ShareHolding,dayStruct.Tactics,dayStruct.DoTacticsNums,dayStruct.TacticsWin,dayStruct.TacticsChange,dayStruct.UpdateDay,
+			dayStruct.StartDay,dayStruct.BeforeDay,dayStruct.TotalMoney,dayStruct.WinMoney,dayStruct.OneMoney,dayStruct.RemainMoney,dayStruct.StockMoney,dayStruct.StockPrice,dayStruct.ShareHolding,dayStruct.Tactics,dayStruct.DoTacticsNums,dayStruct.TacticsWin,dayStruct.TacticsChange,dayStruct.UpdateDay)
+
+
+		if err != nil {
+			panic(err.Error())
+		}
+	}
+
+	err = begin.Commit()
+	if err != nil {
+		panic(err.Error())
+	}
+}
+
+
+
+//获取从今天到前面的几天
+func GetLatestSomeDataFromDay(code ,dayNum int) map[string]*model.DayTrade  {
+	sql:=`
+	SELECT 
+		code, 
+		date,
+		open,
+		close,
+		high,
+		low,
+		volume,
+		money
+	FROM trade_his
+	WHERE code = ?
+	ORDER BY date DESC
+	LIMIT ?
+	`
+	stmt, err := db.Prepare(sql)
+
+	if err != nil {
+		panic(err.Error())
+	}
+	defer stmt.Close()
+
+	days :=  make(map[string]*model.DayTrade,1)
+	rows,err := stmt.Query(code,dayNum)
+
+	if err != nil {
+		panic(err.Error())
+	}
+
+	for rows.Next() {
+		day := &model.DayTrade{}
+		err = rows.Scan(
+			&day.Code,
+			&day.Date,
+			&day.Open,
+			&day.Close,
+			&day.High,
+			&day.Low,
+			&day.Volume,
+			&day.Money,
+		)
+		if err != nil {
+			return nil
+		}
+		days[day.Date] = day
+	}
+	//log.Println("-----return--------GetLatestSomeDataFromDay----------------")
+	return days
+}
+
+
+func IsAllRecordIsOver() bool  {
+	ret:=false
+
+
+	return ret
+
+}
+
+func GetBeforDayCount() int  {
+	ret:=0
+
+	return ret
 }
 
 
@@ -106,4 +210,77 @@ func InsertResult(code int,start_day string ,befor_day int ,total_money ,win_mon
 //	}
 //
 //	return  needStruct
+//}
+
+//
+///获取从今天到前面的几天
+//func GetAllLatestSomeDataFromDay(stocks  []*model.Stock,dayNum int) map[int]*model.DayTrade  {
+//	//code ,dayNum int
+//	sql:=`
+//	SELECT
+//		code,
+//		date,
+//		open,
+//		close,
+//		high,
+//		low,
+//		volume,
+//		money
+//	FROM trade_his
+//	WHERE code = ?
+//	ORDER BY date DESC
+//	LIMIT ?
+//	`
+//	stmt, err := db.Prepare(sql)
+//
+//	if err != nil {
+//		panic(err.Error())
+//	}
+//	defer stmt.Close()
+//
+//	begin, err := db.Begin()
+//	if err != nil {
+//		panic(err.Error())
+//	}
+//	defer begin.Rollback()
+//
+//	for _,v:=range stocks{
+//		begin.Stmt(stmt).Query(v.Id,dayNum)
+//	}
+//
+//	err= begin.Commit()
+//	if err != nil{
+//		panic(err.Error())
+//	}
+//
+//
+//
+//
+//
+//	days :=  make(map[string]*model.DayTrade,1)
+//	rows,err := stmt.Query(code,dayNum)
+//
+//	if err != nil {
+//		panic(err.Error())
+//	}
+//
+//	for rows.Next() {
+//		day := &model.DayTrade{}
+//		err = rows.Scan(
+//			&day.Code,
+//			&day.Date,
+//			&day.Open,
+//			&day.Close,
+//			&day.High,
+//			&day.Low,
+//			&day.Volume,
+//			&day.Money,
+//		)
+//		if err != nil {
+//			return nil
+//		}
+//		days[day.Date] = day
+//	}
+//	//log.Println("-----return--------GetLatestSomeDataFromDay----------------")
+//	return days
 //}
