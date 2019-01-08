@@ -1,7 +1,0 @@
-[[constraint]]
-  branch = "master"
-  name = "github.com/kisielk/gotool"
-
-[[constraint]]
-  branch = "master"
-  name = "golang.org/x/tools"
