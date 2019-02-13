@@ -1,12 +1,13 @@
 package common
 
 import (
-	"time"
-	"errors"
-	"net/http"
+	"common"
+				"net/http"
 	"io/ioutil"
 	"strings"
 	"strconv"
+	"time"
+	"errors"
 )
 
 /*
@@ -40,6 +41,11 @@ type InitBuyStocksS struct {
 	Price  float64
 }
 
+func IntToFloat64(n int) float64 {
+	r:=common.Round64(float64(n), 0)
+	return r
+}
+
 func GetPriceFromUrl(url string) (t float64, err error) {
 	h := time.Now().Hour()
 	if h < 9 || h >= 15 {
@@ -58,32 +64,40 @@ func GetPriceFromUrl(url string) (t float64, err error) {
 		panic(" strconv.ParseFloat error " + err.Error())
 	}
 	return currentPrice, nil
-	//return TestData()
+	//return TestData(),nil
 }
 
 var testData = []float64{
 	12.18,
 	12.18,
 	12.18,
-	//11.18,
-	//11.18,
-	//11.18,
-	//11.00,
-	//11.00,
-	//11.00,
-	//10.76,
-	//10.76,
-	//10.76,
-	//10.01,
-	//10.01,
-	//10.01,
-	//9.99,
-	//9.99,
-	//9.99,
-	//9.76,
-	//9.76,
-	//9.76,
-	9.66,
+	11.18,
+	11.18,
+	11.18,
+	11.00,
+	11.00,
+	11.00,
+	10.76,
+	10.76,
+	10.76,
+	10.76,
+	10.76,
+	10.76,
+	10.01,
+	10.01,
+	10.01,
+	9.99,
+	9.99,
+	9.99,
+	9.99,
+	9.99,
+	9.99,
+	9.76,
+	9.76,
+	9.76,
+	9.76,
+	9.76,
+	9.76,
 	17.56,
 	17.56,
 	17.56,

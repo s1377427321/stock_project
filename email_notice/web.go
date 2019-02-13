@@ -20,7 +20,7 @@ func AddNoticeStock(code string, heightPrice, lowPrice, money float64) {
 			BuyMoney:money,
 			Code:           code,
 			NoticeCallBack: NoticeEmail,
-			NoticeLimit:    2,
+			NoticeLimit:    NoticeLimit,
 		}
 		NoticeStockS[code] = s
 		isNew = true
@@ -48,7 +48,7 @@ func AddBuyStock(code string, price, money float64, copies int) {
 			BuyPrice:                   price,
 			AllMoney:                   money,
 			NumberOfCopies:             copies,
-			NumberOfCopiesPice:         make(map[float64]int, 0),
+			NumberOfCopiesPice:         make(map[float64]*BuyLimit, 0),
 			OrderNumberOfCopiesPiceKey: make([]float64, 0),
 			AddNoticeFunc:              AddNoticeStock,
 			DeleteNoticeFunc:           DeleteNoticeStock,

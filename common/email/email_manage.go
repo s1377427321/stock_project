@@ -25,10 +25,6 @@ type EmailServers struct {
 func SendEmailTo(server *EmailServers, ec *EmailContent)  {
 	client := New(server.ServerEmail,server.ServerPassword, ec.NickName, server.ServerIP, server.ServerPort, true)
 	if err := client.SendEmail(ec.NoticeEmails,ec.Subject,ec.BodyContent);err !=nil{
-		log.Printf("%s send mail error: %v",server.ServerEmail, err)
-		//newServer:=GetRandomEmailServer()
-		//bodyStr += err.Error() +" ...."+server.ServerEmail
-		//SendToAssignEmailTo(nkname,subStr,bodyStr,toEmail)
 		beego.Error(err.Error() +" ...."+server.ServerEmail)
 	}else {
 		beego.Info(fmt.Sprintf("%s send mail success content: %v",server.ServerEmail,ec.BodyContent))

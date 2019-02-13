@@ -34,6 +34,8 @@ func NoticeEmail(s *Stock, content string) {
 	s.SendEmail(emailServer, ec)
 }
 
+var NoticeLimit = 1
+
 func init() {
 	NoticeStockS = make(map[string]*Stock, 0)
 	BuyStocks = make(map[string]*BuyStock, 0)
