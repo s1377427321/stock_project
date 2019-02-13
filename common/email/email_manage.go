@@ -4,7 +4,8 @@ import (
 	"log"
 	"math/rand"
 	"github.com/astaxie/beego"
-	)
+	"fmt"
+)
 
 type EmailContent struct {
 	NoticeEmails []string
@@ -22,17 +23,17 @@ type EmailServers struct {
 }
 
 func SendEmailTo(server *EmailServers, ec *EmailContent)  {
-	//client := New(server.ServerEmail,server.ServerPassword, ec.NickName, server.ServerIP, server.ServerPort, true)
-	//if err := client.SendEmail(ec.NoticeEmails,ec.Subject,ec.BodyContent);err !=nil{
-	//	log.Printf("%s send mail error: %v",server.ServerEmail, err)
-	//	//newServer:=GetRandomEmailServer()
-	//	//bodyStr += err.Error() +" ...."+server.ServerEmail
-	//	//SendToAssignEmailTo(nkname,subStr,bodyStr,toEmail)
-	//	beego.Error(err.Error() +" ...."+server.ServerEmail)
-	//}else {
-	//	beego.Info(fmt.Sprintf("%s SendToAssignEmailTo succes",server.ServerEmail))
-	//}
-	log.Printf("%s send mail error: %v",server.ServerEmail)
+	client := New(server.ServerEmail,server.ServerPassword, ec.NickName, server.ServerIP, server.ServerPort, true)
+	if err := client.SendEmail(ec.NoticeEmails,ec.Subject,ec.BodyContent);err !=nil{
+		log.Printf("%s send mail error: %v",server.ServerEmail, err)
+		//newServer:=GetRandomEmailServer()
+		//bodyStr += err.Error() +" ...."+server.ServerEmail
+		//SendToAssignEmailTo(nkname,subStr,bodyStr,toEmail)
+		beego.Error(err.Error() +" ...."+server.ServerEmail)
+	}else {
+		beego.Info(fmt.Sprintf("%s send mail success content: %v",server.ServerEmail,ec.BodyContent))
+	}
+	//log.Printf("%s send mail error: %v",server.ServerEmail,ec.BodyContent)
 }
 
 func SendToAssignEmailTo(nkname ,subStr,bodyStr string  ,toEmail []string )  {
