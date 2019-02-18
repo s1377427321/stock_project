@@ -2,8 +2,7 @@ package main
 
 import (
 	"math"
-	"fmt"
-)
+	)
 
 /*
 20. 骰子求和
@@ -56,7 +55,4 @@ func dicesSum(n int) {
 	}
 }
 
-func main() {
-	dicesSum(3)
-	fmt.Println(resultList)
-}
+
