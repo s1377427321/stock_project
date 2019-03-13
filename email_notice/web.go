@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"net/http"
 	. "email_notice/common"
+	"github.com/astaxie/beego/logs"
 )
 
 func AddNoticeStock(code string, heightPrice, lowPrice, money float64) {
@@ -25,6 +26,8 @@ func AddNoticeStock(code string, heightPrice, lowPrice, money float64) {
 		NoticeStockS[code] = s
 		isNew = true
 	}
+
+	logs.Info("---AddNoticeStock  ",code,heightPrice,lowPrice)
 
 	s.Url = fmt.Sprintf(mainUrl, code)
 	s.LowPrice = lowPrice
@@ -160,5 +163,4 @@ func RunHttpServer() {
 	err := e.Start(httpPort)
 	fmt.Println(err)
 	panic(err.Error())
-
 }

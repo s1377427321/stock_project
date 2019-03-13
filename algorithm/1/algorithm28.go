@@ -19,7 +19,6 @@ func (this *SearchMatrixS) searchMatrix(target int) (isExist bool) {
 	}
 
 	var rowIndex int
-	var colIndex int
 
 	rowHigh := rowSize - 1
 	rowLow := 0

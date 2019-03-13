@@ -86,6 +86,8 @@ func main() {
 		fmt.Println("error input, use --help shows cmd")
 	}
 
+	dailyTradeUpdate()
+
 	http_server.RunHttpServer()
 	for {
 		time.Sleep(100 * time.Minute)

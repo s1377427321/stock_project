@@ -4,6 +4,7 @@ import (
 	"common"
 	"time"
 	"sort"
+	"github.com/astaxie/beego/logs"
 	"fmt"
 )
 
@@ -45,15 +46,6 @@ func (b *BuyStock) Start() {
 
 	var i int = 1
 	var max int = b.NumberOfCopies * 2
-	for ; i <= b.NumberOfCopies; i++ {
-		index := IntToFloat64(i)*oneCopiesStockPrice
-		//copys := (int(b.oneCopiesMoney/index) / 100) * 100
-		lt:=&BuyLimit{}
-		lt.Middle = index
-		b.NumberOfCopiesPice[index] = lt
-		b.OrderNumberOfCopiesPiceKey = append(b.OrderNumberOfCopiesPiceKey, index)
-	}
-
 	for ; i <= max; i++ {
 		index := IntToFloat64(i)*oneCopiesStockPrice
 		//copys := (int(b.oneCopiesMoney/index) / 100) * 100
@@ -62,6 +54,23 @@ func (b *BuyStock) Start() {
 		b.NumberOfCopiesPice[index] = lt
 		b.OrderNumberOfCopiesPiceKey = append(b.OrderNumberOfCopiesPiceKey, index)
 	}
+	//for ; i <= b.NumberOfCopies; i++ {
+	//	index := IntToFloat64(i)*oneCopiesStockPrice
+	//	//copys := (int(b.oneCopiesMoney/index) / 100) * 100
+	//	lt:=&BuyLimit{}
+	//	lt.Middle = index
+	//	b.NumberOfCopiesPice[index] = lt
+	//	b.OrderNumberOfCopiesPiceKey = append(b.OrderNumberOfCopiesPiceKey, index)
+	//}
+	//
+	//for ; i <= max; i++ {
+	//	index := IntToFloat64(i)*oneCopiesStockPrice
+	//	//copys := (int(b.oneCopiesMoney/index) / 100) * 100
+	//	lt:=&BuyLimit{}
+	//	lt.Middle = index
+	//	b.NumberOfCopiesPice[index] = lt
+	//	b.OrderNumberOfCopiesPiceKey = append(b.OrderNumberOfCopiesPiceKey, index)
+	//}
 
 	sort.Float64s(b.OrderNumberOfCopiesPiceKey)
 
@@ -95,11 +104,16 @@ func (b *BuyStock) Start() {
 
 		current.nextHeight = afterB
 		current.nextLow = beforB
+
+
+		showLog:=b.NumberOfCopiesPice[b.OrderNumberOfCopiesPiceKey[j]]
+
+		logs.Info(fmt.Sprintf("Start  code = %s , Middle = %v , Low = %v , Height = %v   ",b.StockName,showLog.Middle,showLog.Low,showLog.Height) )
 	}
 
 	b.CurrentUpdateBuyLimit = b.NumberOfCopiesPice[b.BuyPrice]
 
-	fmt.Println("AAA")
+
 
 	go func() {
 		b.Update()
@@ -124,8 +138,13 @@ func (b *BuyStock) Update() {
 
 func (b *BuyStock) DoUpdate() {
 
-	currentPrice, err := GetPriceFromUrl(b.StockUrl)
-	if err != nil {
+	h := time.Now().Hour()
+	if h < 9 || h >= 15 {
+		return
+	}
+
+	currentPrice, err := common.GetPriceFromUrl(b.StockUrl)
+	if err != nil || currentPrice < 0.001{
 		return
 	}
 

@@ -5,6 +5,7 @@ import (
 	"time"
 	"fmt"
 	"common/email"
+	"common"
 )
 
 var UpdataTicket = 5 * time.Second
@@ -29,7 +30,7 @@ type Stock struct {
 	closeCh        chan interface{}
 	NoticeLimit    int
 	Count          int
-	CountOverTime time.Time
+	CountOverTime  time.Time
 }
 
 func (s *Stock) Start() {
@@ -58,13 +59,13 @@ func (s *Stock) SendEmail(es *email.EmailServers, ec *email.EmailContent) {
 	s.Count ++
 	if s.Count > s.NoticeLimit {
 		//一小时以后恢复发送邮件
-		addTime:=s.CountOverTime.Add(1*time.Hour)
+		addTime := s.CountOverTime.Add(2 * time.Hour)
 		//addTime:=s.CountOverTime.Add(2*time.Second)
 		if time.Now().After(addTime) {
 			s.Count = 0
 		}
 		return
-	}else {
+	} else {
 		//记录发送了的时间
 		s.CountOverTime = time.Now()
 	}
@@ -72,26 +73,32 @@ func (s *Stock) SendEmail(es *email.EmailServers, ec *email.EmailContent) {
 }
 
 func (s *Stock) UpdateCurrentPrice() (isSendEmail bool, emialContent string) {
+
+	h := time.Now().Hour()
+	if h < 9 || h >= 15 {
+		return
+	}
+
 	s.mx.Lock()
 	defer s.mx.Unlock()
-	currentPrice, err := GetPriceFromUrl(s.Url)
-	if err != nil {
+	currentPrice, err := common.GetPriceFromUrl(s.Url)
+	if err != nil || currentPrice < 0.001 {
 		return false, ""
 	}
 
-	strFormat:="%s current price : %v  and  height price：%v, low price：%v ,buy money:%v , buy copies:%v"
-	var content = fmt.Sprintf(strFormat, s.Code, currentPrice, s.HeightPrice, s.LowPrice,s.BuyMoney,0)
+	strFormat := "%s current price : %v  and  height price：%v, low price：%v ,buy money:%v , buy copies:%v"
+	var content = fmt.Sprintf(strFormat, s.Code, currentPrice, s.HeightPrice, s.LowPrice, s.BuyMoney, 0)
 	fmt.Println(content)
 
 	if currentPrice >= s.HeightPrice {
-		bc:= (int(s.BuyMoney/s.HeightPrice) / 100) * 100
-		var content = fmt.Sprintf(strFormat, s.Code, currentPrice, s.HeightPrice, s.LowPrice,s.BuyMoney,bc)
+		bc := (int(s.BuyMoney/s.HeightPrice) / 100) * 100
+		var content = fmt.Sprintf(strFormat, s.Code, currentPrice, s.HeightPrice, s.LowPrice, s.BuyMoney, bc)
 		s.NoticeCallBack(s, content)
 		return true, content
 
 	} else if currentPrice <= s.LowPrice {
-		bc:= (int(s.BuyMoney/s.LowPrice) / 100) * 100
-		var content = fmt.Sprintf(strFormat, s.Code, currentPrice, s.HeightPrice, s.LowPrice,s.BuyMoney,bc)
+		bc := (int(s.BuyMoney/s.LowPrice) / 100) * 100
+		var content = fmt.Sprintf(strFormat, s.Code, currentPrice, s.HeightPrice, s.LowPrice, s.BuyMoney, bc)
 		s.NoticeCallBack(s, content)
 		return true, content
 	}
