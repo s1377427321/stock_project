@@ -22,9 +22,8 @@ func (c IntSlice) Swap(i, j int) {
 	c[i], c[j] = c[j], c[i]
 }
 func (c IntSlice) Less(i, j int) bool {
-	return  c[i] < c[j]
+	return c[i] < c[j]
 }
-
 
 func CreateBeegoLog(fileName string) {
 	dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
@@ -81,11 +80,8 @@ func SetLogOption(logDir, namePrefix string, logLevel int, logToConsole bool) er
 	return nil
 }
 
-
-
-
 //用map填充结构
-func FillStruct(data map[string]interface{}, obj interface{}) error {
+func FillStruct(data map[string]string, obj interface{}) error {
 	for k, v := range data {
 		err := SetField(obj, k, v)
 		if err != nil {
@@ -97,8 +93,20 @@ func FillStruct(data map[string]interface{}, obj interface{}) error {
 
 //用map的值替换结构的值
 func SetField(obj interface{}, name string, value interface{}) error {
-	structValue := reflect.ValueOf(obj).Elem()        //结构体属性值
-	structFieldValue := structValue.FieldByName(name) //结构体单个属性值
+	structValue := reflect.ValueOf(obj).Elem() //结构体属性值
+
+	var trueName string
+	structType := reflect.TypeOf(obj)
+	lens := structValue.NumField()
+	for i := 0; i < lens; i++ {
+		logs.Info(structType.Kind())
+		tempName := structType.Field(i)
+		if name == tempName.Tag.Get("json") {
+			trueName = tempName.Name
+		}
+	}
+
+	structFieldValue := structValue.FieldByName(trueName) //结构体单个属性值
 
 	if !structFieldValue.IsValid() {
 		return fmt.Errorf("No such field: %s in obj", name)
@@ -158,3 +166,41 @@ func TypeConversion(value string, ntype string) (reflect.Value, error) {
 	return reflect.ValueOf(value), errors.New("未知的类型：" + ntype)
 }
 
+func DataToStruct(data map[string]string, out interface{}) {
+	ss := reflect.ValueOf(out).Elem()
+	for i := 0; i < ss.NumField(); i++ {
+		val := data[ss.Type().Field(i).Tag.Get("json")]
+		name := ss.Type().Field(i).Name
+		logs.Info("tag:%s, tag value:%s, filed name:%s", ss.Type().Field(i).Tag.Get("json"), val, name)
+		switch ss.Field(i).Kind() {
+		case reflect.String:
+			ss.FieldByName(name).SetString(val)
+		case reflect.Int, reflect.Int16, reflect.Int32, reflect.Int64:
+			i, err := strconv.Atoi(val)
+			//  fmt.Println("i:", i, name)
+			if err != nil {
+				logs.Info("can't not atoi:%v", val)
+				continue
+			}
+			ss.FieldByName(name).SetInt(int64(i))
+		case reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			i, err := strconv.Atoi(val)
+			//  fmt.Println("i:", i, name)
+			if err != nil {
+				logs.Info("can't not atoi:%v", val)
+				continue
+			}
+			ss.FieldByName(name).SetUint(uint64(i))
+		case reflect.Float32, reflect.Float64:
+			f, err := strconv.ParseFloat(val, 64)
+			if err != nil {
+				logs.Info("can't not ParseFloat:%v", val)
+				continue
+			}
+			ss.FieldByName(name).SetFloat(f)
+		default:
+			logs.Info("unknown type:%+v", ss.Field(i).Kind())
+		}
+	}
+	return
+}

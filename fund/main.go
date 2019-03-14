@@ -13,7 +13,7 @@ func init() {
 }
 
 func main() {
-	common.GetAllStocksInfo()
+	common.GetDealBuyStaticsInfos()
 	//common.GetDealBuyStaticsInfos()
 	//var err error
 	//Engine, err = xorm.NewEngine("mysql", structs.SQLParams)

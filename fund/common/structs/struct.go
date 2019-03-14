@@ -44,26 +44,27 @@ type StockItem struct {
 
 //buy_statics数据库处理字段
 type BuyStaticsInfo struct {
-	Code                    string
-	CodeName                string
-	FixedInvestMentMoney    float64
-	FirstProfitabilityRate  float64
-	CurretProfitabilityRate float64
-	Pe                      float64
-	Pb                      float64
-	DividentYield           float64
-	Roe                     float64
-
+	Code                    string  `json:"code"`
+	CodeName                string  `json:"code_name"`
+	FixedInvestmentMoney    float64 `json:"fixed_investment_money"`
+	FirstProfitabilityRate  float64 `json:"first_profitability_rate"`
+	CurrentProfitabilityRate float64 `json:"current_profitability_rate"`
+	Pe                      float64 `json:"pe"`
+	Pb                      float64 `json:"pb"`
+	DividentYield           float64 `json:"divident_yield"`
+	Roe                     float64 `json:"roe"`
+	SecondPower             float64 `json:"second_power"`
 }
 
 type StockBasicInfo struct {
+	Id         int    `json:"id"`
 	TsCode     string `json:"ts_code"`     //TS代码
 	Symbol     string `json:"symbol"`      //股票代码
 	Name       string `json:"name"`        //股票名称
 	Area       string `json:"area"`        //所在地域
 	Industry   string `json:"industry"`    //str	所属行业
-	Fullname   string `json:"fullname"`   //str	股票全称
-	Enname     string `json:"enname"`    //英文全称
+	Fullname   string `json:"fullname"`    //str	股票全称
+	Enname     string `json:"enname"`      //英文全称
 	Market     string `json:"market"`      //市场类型 （主板/中小板/创业板）
 	Exchange   string `json:"exchange"`    //str	交易所代码
 	CurrType   string `json:"curr_type"`   //str	交易货币
