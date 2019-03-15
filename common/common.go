@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"time"
 	"strconv"
+	"runtime"
 )
 
 type IntSlice []int
@@ -81,7 +82,7 @@ func SetLogOption(logDir, namePrefix string, logLevel int, logToConsole bool) er
 }
 
 //用map填充结构
-func FillStruct(data map[string]string, obj interface{}) error {
+func FillStruct(data map[string]interface{}, obj interface{}) error {
 	for k, v := range data {
 		err := SetField(obj, k, v)
 		if err != nil {
@@ -93,20 +94,8 @@ func FillStruct(data map[string]string, obj interface{}) error {
 
 //用map的值替换结构的值
 func SetField(obj interface{}, name string, value interface{}) error {
-	structValue := reflect.ValueOf(obj).Elem() //结构体属性值
-
-	var trueName string
-	structType := reflect.TypeOf(obj)
-	lens := structValue.NumField()
-	for i := 0; i < lens; i++ {
-		logs.Info(structType.Kind())
-		tempName := structType.Field(i)
-		if name == tempName.Tag.Get("json") {
-			trueName = tempName.Name
-		}
-	}
-
-	structFieldValue := structValue.FieldByName(trueName) //结构体单个属性值
+	structValue := reflect.ValueOf(obj).Elem()
+	structFieldValue := structValue.FieldByName(name)
 
 	if !structFieldValue.IsValid() {
 		return fmt.Errorf("No such field: %s in obj", name)
@@ -116,15 +105,10 @@ func SetField(obj interface{}, name string, value interface{}) error {
 		return fmt.Errorf("Cannot set %s field value", name)
 	}
 
-	structFieldType := structFieldValue.Type() //结构体的类型
-	val := reflect.ValueOf(value)              //map值的反射值
-
-	var err error
+	structFieldType := structFieldValue.Type()
+	val := reflect.ValueOf(value)
 	if structFieldType != val.Type() {
-		val, err = TypeConversion(fmt.Sprintf("%v", value), structFieldValue.Type().Name()) //类型转换
-		if err != nil {
-			return err
-		}
+		return errors.New("Provided value type didn't match obj field type")
 	}
 
 	structFieldValue.Set(val)
@@ -171,7 +155,7 @@ func DataToStruct(data map[string]string, out interface{}) {
 	for i := 0; i < ss.NumField(); i++ {
 		val := data[ss.Type().Field(i).Tag.Get("json")]
 		name := ss.Type().Field(i).Name
-		logs.Info("tag:%s, tag value:%s, filed name:%s", ss.Type().Field(i).Tag.Get("json"), val, name)
+		//logs.Info("tag:%s, tag value:%s, filed name:%s", ss.Type().Field(i).Tag.Get("json"), val, name)
 		switch ss.Field(i).Kind() {
 		case reflect.String:
 			ss.FieldByName(name).SetString(val)
@@ -180,6 +164,7 @@ func DataToStruct(data map[string]string, out interface{}) {
 			//  fmt.Println("i:", i, name)
 			if err != nil {
 				logs.Info("can't not atoi:%v", val)
+				panic(err)
 				continue
 			}
 			ss.FieldByName(name).SetInt(int64(i))
@@ -188,6 +173,7 @@ func DataToStruct(data map[string]string, out interface{}) {
 			//  fmt.Println("i:", i, name)
 			if err != nil {
 				logs.Info("can't not atoi:%v", val)
+				panic(err)
 				continue
 			}
 			ss.FieldByName(name).SetUint(uint64(i))
@@ -195,12 +181,34 @@ func DataToStruct(data map[string]string, out interface{}) {
 			f, err := strconv.ParseFloat(val, 64)
 			if err != nil {
 				logs.Info("can't not ParseFloat:%v", val)
+				panic(err)
 				continue
 			}
 			ss.FieldByName(name).SetFloat(f)
 		default:
+			panic("unknown type")
 			logs.Info("unknown type:%+v", ss.Field(i).Kind())
 		}
 	}
 	return
+}
+
+
+
+// RecoverPanic 恢复panic
+func RecoverPanic() {
+	err := recover()
+	if err != nil {
+		GetPanicInfo()
+	}
+
+}
+
+// PrintStaStack 打印Panic堆栈信息
+func GetPanicInfo() string {
+	buf := make([]byte, 2048)
+	n := runtime.Stack(buf, false)
+	des := fmt.Sprintf("%s", buf[:n])
+	logs.Error("GetPanicInfo error ", des)
+	return des
 }

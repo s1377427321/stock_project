@@ -31,18 +31,6 @@ func GetDealBuyStaticsInfos() {
 
 		common.DataToStruct(v,newCf)
 
-		//jdata, err := json.Marshal(v)
-		//if err != nil {
-		//	panic("jdata, err := json.Marshal(v)" + err.Error())
-		//}
-		//
-		//logs.Info(string(jdata))
-		//
-		//err = json.Unmarshal(jdata, newCf)
-		//if err != nil {
-		//	panic("err = json.Unmarshal(jdata, newCf)" + err.Error())
-		//}
-
 		logs.Info(newCf)
 
 		CodeInfos = append(CodeInfos, newCf)

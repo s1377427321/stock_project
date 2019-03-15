@@ -14,7 +14,7 @@ import (
 	"strings"
 	"stock_statistics/storage"
 	"time"
-)
+	)
 
 /**
  * 获取沪深A股，创业板个股的日线
@@ -28,6 +28,7 @@ func NewDayTradeHelper() *DayTradeHelper {
 }
 
 func (this *DayTradeHelper) Update(stock *model.Stock) {
+
 	day:=storage.GetLatestDayStock(stock)
 	now := time.Now().Format("20060102")
 	var added []*model.DayTrade

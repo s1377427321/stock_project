@@ -2,6 +2,9 @@ package structs
 
 import "fmt"
 
+//163获取股票历史记录
+var DAY_TRADE_API = "http://quotes.money.163.com/service/chddata.html?code=%s&start=%s&end=%s"
+
 var HTTP_URL = "http://api.tushare.pro"
 
 var TOKEN = "6ad2bcae0a39b5feab53acb555a149080db53e4f0640492485cbb8ce"
@@ -44,16 +47,16 @@ type StockItem struct {
 
 //buy_statics数据库处理字段
 type BuyStaticsInfo struct {
-	Code                    string  `json:"code"`
-	CodeName                string  `json:"code_name"`
-	FixedInvestmentMoney    float64 `json:"fixed_investment_money"`
-	FirstProfitabilityRate  float64 `json:"first_profitability_rate"`
+	Code                     string  `json:"code"`
+	CodeName                 string  `json:"code_name"`
+	FixedInvestmentMoney     float64 `json:"fixed_investment_money"`
+	FirstProfitabilityRate   float64 `json:"first_profitability_rate"`
 	CurrentProfitabilityRate float64 `json:"current_profitability_rate"`
-	Pe                      float64 `json:"pe"`
-	Pb                      float64 `json:"pb"`
-	DividentYield           float64 `json:"divident_yield"`
-	Roe                     float64 `json:"roe"`
-	SecondPower             float64 `json:"second_power"`
+	Pe                       float64 `json:"pe"`
+	Pb                       float64 `json:"pb"`
+	DividentYield            float64 `json:"divident_yield"`
+	Roe                      float64 `json:"roe"`
+	SecondPower              float64 `json:"second_power"`
 }
 
 type StockBasicInfo struct {
@@ -72,6 +75,19 @@ type StockBasicInfo struct {
 	ListDate   string `json:"list_date"`   //str	上市日期
 	DelistDate string `json:"delist_date"` //str	退市日期
 	IsHs       string `json:"is_hs"`       //是否沪深港通标的，N否 H沪股通 S深股通
+}
+
+//每日数据
+type DialyStockInfo struct {
+	Id     int     `json:"id"`
+	Code   int     `json:"code"`
+	Date   string  `json:"date"`
+	Open   float64 `json:"open"`
+	Close  float64 `json:"close"`
+	High   float64 `json:"high"`
+	Low    float64 `json:"low"`
+	Volume int     `json:"volume"`
+	Money  int     `json:"money"`
 }
 
 type IncomeS struct {

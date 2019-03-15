@@ -15,7 +15,27 @@ import (
 	. "fund/common/structs"
 	"fund/stocks"
 	"github.com/go-xorm/xorm"
+	"common"
+	"log"
+	"stock_statistics/constant"
+	"github.com/axgle/mahonia"
+	"encoding/csv"
+	"strings"
+	"io"
+
+	commons "common"
 )
+
+var Engine *xorm.Engine
+
+func init() {
+	logs.Info("Start MYSQL")
+	var err error
+	Engine, err = xorm.NewEngine("mysql", SQLParams)
+	if err != nil {
+		panic(err)
+	}
+}
 
 func GetFields(fields []interface{}) []string {
 	res := make([]string, 0)
@@ -345,18 +365,19 @@ func GetAllStocksInfo() ([]*StockBasicInfo, error) {
 	}
 
 	for _, v := range queryR {
-		jdata, err := json.Marshal(v)
-		if err != nil {
-			panic("NO NO NO")
-		}
-
-		logs.Info(string(jdata))
+		//jdata, err := json.Marshal(v)
+		//if err != nil {
+		//	panic("NO NO NO")
+		//}
+		//
+		//logs.Info(string(jdata))
 
 		temp := &StockBasicInfo{}
-		err = json.Unmarshal(jdata, temp)
-		if err != nil {
-			panic(err)
-		}
+		common.DataToStruct(v, temp)
+		//err = json.Unmarshal(jdata, temp)
+		//if err != nil {
+		//	panic(err)
+		//}
 
 		logs.Info(temp)
 
@@ -365,4 +386,179 @@ func GetAllStocksInfo() ([]*StockBasicInfo, error) {
 	}
 
 	return resultS, nil
+}
+
+//trade_his  1  从网络获取个股股价等信息，插入表trade_his中
+func UpdateDayTradeData() {
+	stocks, err := GetAllStocksInfo()
+	if err != nil {
+		panic(err)
+	}
+
+	sem := make(chan int, 15)
+	for _, stock := range stocks {
+		go func(s *StockBasicInfo) {
+			UpdateDayTradeDataNext1(s, sem)
+		}(stock)
+		select {
+		case <-time.After(10 * time.Second):
+			fmt.Println("========do time.After(1) ======")
+			//delete(sem,chan)
+		case <-sem:
+			fmt.Println("========do self <-sem======")
+		}
+
+		//UpdateDayTradeDataNext1(stock, sem)
+	}
+
+}
+
+//trade_his  2 插入操作
+func UpdateDayTradeDataNext1(stock *StockBasicInfo, sem chan int) {
+	defer commons.RecoverPanic()
+	lastestStocksInfo := GetLatestDayStock(stock)
+
+	now := time.Now().Format("20060102")
+	var added []*DialyStockInfo
+	if lastestStocksInfo == nil || lastestStocksInfo.Date == "" {
+		before := time.Unix(time.Now().Unix()-3600*24*360*5, 0).Format("20060102")
+		added = GetDailTradeFromCSV(stock, before, now)
+	} else {
+		last, _ := time.Parse("2006-01-02", lastestStocksInfo.Date)
+		// init today
+		from := time.Unix(last.Unix()+3600*24*1, 0).Format("20060102")
+		if from == now {
+			log.Println("not data need insert ", lastestStocksInfo.Code)
+			sem <- 1
+			return
+		}
+
+		added = GetDailTradeFromCSV(stock, from, now)
+	}
+
+	logs.Info("InsertTradeHis  ", stock.TsCode)
+
+	if len(added) != 0 {
+		InsertTradeHis(added)
+	}
+
+	logs.Info("SUCESS ", stock.TsCode)
+
+	sem <- 1
+}
+
+//trade_his  3 获取最近一天记录到数据库的数据，为了更新数据用
+func GetLatestDayStock(stock *StockBasicInfo) *DialyStockInfo {
+	sqlStr := `
+	SELECT * FROM trade_his WHERE code=%d ORDER BY date DESC LIMIT 1;
+	`
+	code, err := strconv.Atoi(stock.Symbol)
+	if err != nil {
+		panic(fmt.Sprintf("%v strconv.Atoi error %v", stock.Symbol, err))
+	}
+
+	sql := fmt.Sprintf(sqlStr, code)
+	sqlResult, err := Engine.QueryString(sql)
+	if err != nil || sqlResult == nil {
+		return nil
+	}
+
+	ret := &DialyStockInfo{}
+
+	commons.DataToStruct(sqlResult[0], ret)
+
+	return ret
+}
+
+//trade_his  4 从163网上下载csv格式数据，然后保存到数据库中
+func GetDailTradeFromCSV(stock *StockBasicInfo, begin, end string) []*DialyStockInfo {
+	typeStock := []byte(stock.Symbol)[0]
+	var url string
+	if typeStock == []byte("0")[0] || typeStock == []byte("3")[0] {
+		url = fmt.Sprintf(constant.DAY_TRADE_API, "1"+stock.Symbol, begin, end)
+	} else if typeStock == []byte("6")[0] {
+		url = fmt.Sprintf(constant.DAY_TRADE_API, "0"+stock.Symbol, begin, end)
+	} else {
+		panic(fmt.Sprintf("%v  error code id %v", "GetDailTradeFromCSV", stock.Symbol, ))
+	}
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil
+	}
+
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+
+	if err != nil {
+		return nil
+	}
+	enc := mahonia.NewDecoder("gbk")
+	_, utf8Body, _ := enc.Translate(body, true)
+
+	days := make([]*DialyStockInfo, 0)
+
+	r := csv.NewReader(strings.NewReader(string(utf8Body)))
+	r.Read()
+	for {
+		cols, err := r.Read()
+
+		if err == io.EOF {
+			break
+		}
+
+		if err != nil {
+			return nil
+		}
+
+		Close, _ := strconv.ParseFloat(cols[3], 64)
+		Open, _ := strconv.ParseFloat(cols[6], 64)
+		Low, _ := strconv.ParseFloat(cols[5], 64)
+		High, _ := strconv.ParseFloat(cols[4], 64)
+		Volume, _ := strconv.Atoi(cols[11])
+		Money, _ := strconv.ParseFloat(cols[12], 64)
+		Code, _ := strconv.Atoi(strings.TrimLeft(cols[1], "'"))
+
+		if Open == 0 {
+			continue
+		}
+
+		days = append(days, &DialyStockInfo{
+			Date:   cols[0],
+			Code:   Code,
+			Close:  Close,
+			High:   High,
+			Low:    Low,
+			Open:   Open,
+			Volume: Volume,
+			Money:  int(Money),
+		})
+
+	}
+
+	return days
+}
+
+//trade_his  5 把数据插入到数据库中
+func InsertTradeHis(stockInfos []*DialyStockInfo) {
+	sql := "replace into trade_his(`code`,`date`,`open`,`close`,`high`,`low`,`volume`,`money`)VALUES"
+
+	for i := 0; i < len(stockInfos); i++ {
+		v := stockInfos[i]
+		var tempStr string
+		if i == len(stockInfos)-1 {
+			tempStr = fmt.Sprintf("(%d,\"%s\",%f,%f,%f,%f,%d,%d);", v.Code, v.Date, v.Open, v.Close, v.High, v.Low, v.Volume, v.Money)
+		} else {
+			tempStr = fmt.Sprintf("(%d,\"%s\",%f,%f,%f,%f,%d,%d),", v.Code, v.Date, v.Open, v.Close, v.High, v.Low, v.Volume, v.Money)
+		}
+		sql += tempStr
+	}
+
+	_, err := Engine.Exec(sql)
+
+	if err != nil {
+		logs.Error(sql)
+		panic(fmt.Sprintf("%v ERROR %v", "Engine.Exec", err))
+	}
 }
