@@ -160,30 +160,51 @@ func DataToStruct(data map[string]string, out interface{}) {
 		case reflect.String:
 			ss.FieldByName(name).SetString(val)
 		case reflect.Int, reflect.Int16, reflect.Int32, reflect.Int64:
-			i, err := strconv.Atoi(val)
-			//  fmt.Println("i:", i, name)
-			if err != nil {
-				logs.Info("can't not atoi:%v", val)
-				panic(err)
-				continue
+			var i int
+			var err error
+			if val == "null" {
+				i = 0
+			} else {
+				i, err = strconv.Atoi(val)
+				//  fmt.Println("i:", i, name)
+				if err != nil {
+					logs.Info("can't not atoi:%v", val)
+					panic(err)
+					continue
+				}
 			}
+
 			ss.FieldByName(name).SetInt(int64(i))
 		case reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			i, err := strconv.Atoi(val)
-			//  fmt.Println("i:", i, name)
-			if err != nil {
-				logs.Info("can't not atoi:%v", val)
-				panic(err)
-				continue
+			var i int
+			var err error
+			if val == "null" {
+				i = 0
+			} else {
+				i, err = strconv.Atoi(val)
+				//  fmt.Println("i:", i, name)
+				if err != nil {
+					logs.Info("can't not atoi:%v", val)
+					panic(err)
+					continue
+				}
 			}
+
 			ss.FieldByName(name).SetUint(uint64(i))
 		case reflect.Float32, reflect.Float64:
-			f, err := strconv.ParseFloat(val, 64)
-			if err != nil {
-				logs.Info("can't not ParseFloat:%v", val)
-				panic(err)
-				continue
+			var f float64
+			var err error
+			if val == "null" {
+				f = 0
+			} else {
+				f, err = strconv.ParseFloat(val, 64)
+				if err != nil {
+					logs.Info("can't not ParseFloat:%v", val)
+					panic(err)
+					continue
+				}
 			}
+
 			ss.FieldByName(name).SetFloat(f)
 		default:
 			panic("unknown type")
@@ -192,8 +213,6 @@ func DataToStruct(data map[string]string, out interface{}) {
 	}
 	return
 }
-
-
 
 // RecoverPanic 恢复panic
 func RecoverPanic() {

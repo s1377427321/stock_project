@@ -1,20 +1,14 @@
 package common
 
 import (
-	"errors"
-	"reflect"
 	"fmt"
-	"encoding/json"
 	"github.com/astaxie/beego/logs"
-	"bytes"
 	"net/http"
 	"io/ioutil"
 	"time"
 	"strconv"
-	"sort"
 	. "fund/common/structs"
-	"fund/stocks"
-	"github.com/go-xorm/xorm"
+		"github.com/go-xorm/xorm"
 	"common"
 	"log"
 	"stock_statistics/constant"
@@ -37,275 +31,54 @@ func init() {
 	}
 }
 
-func GetFields(fields []interface{}) []string {
-	res := make([]string, 0)
-	for _, v := range fields {
-		//logs.Info(k,v)
-		res = append(res, v.(string))
-	}
 
-	return res
-}
-
-func GetContent(fields []interface{},con []interface{}) ([][]string,[]map[string]string) {
-	res := make([][]string, 0)
-	resMaps:= make([]map[string]string,0)
-	for _, v := range con {
-		items := make([]string, 0)
-		for _, vv := range v.([]interface{}) {
-			//logs.Info("+++++++++++++++++")
-			//logs.Info(kk,vv,reflect.TypeOf(vv))
-			if vv == nil {
-				items = append(items, "null")
-				continue
-			}
-			kind := reflect.TypeOf(vv).Kind()
-			var value string
-			switch kind {
-			case reflect.Float64:
-				convv := vv.(float64)
-				value = fmt.Sprintf("%f", convv)
-				//value = strconv.FormatFloat(convv,'E',-1,64)
-				//float,_ := strconv.ParseFloat(value,64)
-				//logs.Info("***** ",value)
-			case reflect.String:
-				value = vv.(string)
-				if value == "" {
-					panic("AAAAAAAAAAAAAA")
-				}
-				//logs.Info("***** ",value)
-			case reflect.Int:
-				convv := vv.(int)
-				value = fmt.Sprintf("%d", convv)
-				if value == "" {
-					panic("AAAAAAAAAAAAAA")
-				}
-			default:
-				panic("GetContent GetContent Error")
-			}
-			items = append(items, value)
-
-		}
-
-		resMap:=make(map[string]string,0)
-		for i:=0;i<len(items);i++ {
-			key:=fields[i].(string)
-			resMap[key] = items[i]
-		}
-
-		res = append(res, items)
-		resMaps = append(resMaps,resMap)
-
-		//fmt.Println(reflect.TypeOf(v))
-		//logs.Info(k,v)
-	}
-	return res,resMaps
-}
-
-func PostToUrl(apiName string, fields string, ps *Params, ) ([]string, [][]string,[]map[string]string, error) {
-	//ps := common.Params{
-	//	Ts_Code:    "002594.SZ",
-	//	Trade_Date: "20180726",
-	//}
-
-	//rp := common.ReqParams{
-	//	ApiName: "daily_basic",
-	//	Token:   common.TOKEN,
-	//	Params:  *ps,
-	//	Fields:  "ts_code,pe,pb,close,total_share,float_share,free_share,total_mv",
-	//}
-
-	rp := ReqParams{
-		ApiName: apiName,
-		Token:   TOKEN,
-		Params:  *ps,
-		Fields:  fields,
-	}
-
-	jsb, err := json.Marshal(rp)
+func SaveIncomeDatasToMySQL() {
+	stocks, err := GetAllStocksInfo()
 	if err != nil {
-		panic("json error " + err.Error())
+		panic(err)
 	}
-
-	//logs.Info("----------", string(jsb))
-
-	req := bytes.NewBuffer(jsb)
-
-	body_type := "application/json;charset=utf-8"
-	resp, err := http.Post(HTTP_URL, body_type, req)
-	body, _ := ioutil.ReadAll(resp.Body)
-	//logs.Info("----------", string(body))
-
-	var dat map[string]interface{}
-	json.Unmarshal(body, &dat)
-	if v, ok := dat["code"]; ok {
-		if v.(float64) != 0 {
-			return nil, nil,nil, errors.New("request error :" + err.Error())
-		}
-	}
-
-	for _, v := range dat {
-		//logs.Info("----------", reflect.TypeOf(v))
-		//logs.Info(k, v)
-		if v != nil {
-			//logs.Info(reflect.TypeOf(v).Kind())
-			if reflect.TypeOf(v).Kind() == reflect.Map {
-				//fmt.Println("AAAAAAAAAAAA")
-				//
-				//for vv,kk:=range v.(map[string]interface{})["items"].([]interface{}){
-				//	fmt.Println("GGG  ",vv)
-				//	fmt.Println("GGG  ",kk)
-				//}
-				//
-				//
-				//fmt.Println(v.(map[string]interface{})["items"].([]interface{}))
-				//fmt.Println(reflect.TypeOf(v.(map[string]interface{})["items"]))
-				//fmt.Println(reflect.TypeOf(v.(map[string]interface{})["items"]))
-				//fmt.Println(v.(map[string]interface{})["fields"].([]interface{}))
-				f := GetFields(v.(map[string]interface{})["fields"].([]interface{}))
-				items,itmsMap := GetContent(v.(map[string]interface{})["fields"].([]interface{}),v.(map[string]interface{})["items"].([]interface{}))
-				//logs.Info(f)
-				//logs.Info(items)
-				return f, items,itmsMap, nil
-				//return  v.(map[string]interface{})["fields"].(interface{}),v.(map[string]interface{})["items"].([]interface{}),nil
-			}
-		}
-	}
-	return nil, nil,nil, errors.New("NOT FIND")
-}
-
-//获取最新四个季度的每股收入
-func GetLatestYearPerIncome(code string) float64 {
 	now := time.Now().Format("20060102")
-	logs.Info(now)
-	fields, items, _ ,_:= GetIncome(code, "20170101", now)
-	ann_date_index := 0
-	basic_eps := 0
-	for k, v := range fields {
-		if v == "ann_date" {
-			ann_date_index = k
-
-		}
-		if v == "basic_eps" {
-			basic_eps = k
-		}
-	}
-
-	saveSlice := make(IncomeSS, 0)
-	tempSave := make(map[int]int, 0)
-	for _, v := range items {
-		t, err := strconv.Atoi(v[ann_date_index])
+	startDate := "20100101"
+	for _, v := range stocks {
+		_, _, itemsMap, err := GetIncome(v.TsCode, startDate, now)
 		if err != nil {
-			panic("time.Parse " + err.Error())
-		}
-
-		if _, ok := tempSave[t]; ok {
+			logs.Error("Not SUCCESS ",v.TsCode)
 			continue
 		}
+		stockItems := make([]*StockIncome, 0)
+		for _, vv := range itemsMap {
+			temp := &StockIncome{}
+			commons.DataToStruct(vv, temp)
 
-		tempSave[t] = t
-		newS := &IncomeS{
-			Data: v,
-			Time: t,
+			stockItems = append(stockItems, temp)
 		}
 
-		saveSlice = append(saveSlice, newS)
+		SaveIncomeDatasToMySQL2(stockItems)
+		time.Sleep(1*time.Second)
 	}
+}
 
-	sort.Sort(saveSlice)
+func SaveIncomeDatasToMySQL2(stocks []*StockIncome) {
+	sql := "replace into stock_income(`ts_code`,`ann_date`,`f_ann_date`,`end_date`,`report_type`,`comp_type`,`basic_eps`,`diluted_eps`,`total_revenue`,`revenue`,`int_income`,`prem_earned`,`comm_income`,`n_commis_income`,`n_oth_income`,`n_oth_b_income`,`prem_income`,`out_prem`,`une_prem_reser`,`reins_income`,`n_sec_tb_income`,`n_sec_uw_income`,`n_asset_mg_income`,`oth_b_income`,`fv_value_chg_gain`,`invest_income`,`ass_invest_income`,`forex_gain`,`total_cogs`,`oper_cost`,`int_exp`,`comm_exp`,`biz_tax_surchg`,`sell_exp`,`admin_exp`,`fin_exp`,`assets_impair_loss`,`prem_refund`,`compens_payout`,`reser_insur_liab`,`div_payt`,`reins_exp`,`oper_exp`,`compens_payout_refu`,`insur_reser_refu`,`reins_cost_refund`,`other_bus_cost`,`operate_profit`,`non_oper_income`,`non_oper_exp`,`nca_disploss`,`total_profit`,`income_tax`,`n_income`,`n_income_attr_p`,`minority_gain`,`oth_compr_income`,`t_compr_income`,`compr_inc_attr_p`,`compr_inc_attr_m_s`,`ebit`,`ebitda`,`insurance_exp`,`undist_profit`,`distable_profit`)VALUES"
 
-	for i := 0; i < len(saveSlice)-1; i++ {
-		beforMoth := (saveSlice[i].Time / 100) % 100
-		afterMoth := (saveSlice[i+1].Time / 100) % 100
+	for i := 0; i < len(stocks); i++ {
+		v := stocks[i]
 
-		pc, err := strconv.ParseFloat(saveSlice[i].Data[basic_eps], 64)
-		if err != nil {
-			panic("ParseFloat  " + err.Error())
-		}
-
-		pc2, err := strconv.ParseFloat(saveSlice[i+1].Data[basic_eps], 64)
-		if err != nil {
-			panic("ParseFloat  " + err.Error())
-		}
-
-		if beforMoth >= 5 && afterMoth >= 4 {
-			saveSlice[i].PerInCome = pc - pc2
-		} else if beforMoth == 4 && afterMoth <= 4 {
-			saveSlice[i].PerInCome = pc
-		} else if beforMoth <= 4 && afterMoth >= 9 {
-			saveSlice[i].PerInCome = pc - pc2
+		if len(stocks)-1 == i {
+			sql += fmt.Sprintf("(\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f);", v.Ts_code, v.Ann_date, v.F_ann_date, v.End_date, v.Report_type, v.Comp_type, v.Basic_eps, v.Diluted_eps, v.Total_revenue, v.Revenue, v.Int_income, v.Prem_earned, v.Comm_income, v.N_commis_income, v.N_oth_income, v.N_oth_b_income, v.Prem_income, v.Out_prem, v.Une_prem_reser, v.Reins_income, v.N_sec_tb_income, v.N_sec_uw_income, v.N_asset_mg_income, v.Oth_b_income, v.Fv_value_chg_gain, v.Invest_income, v.Ass_invest_income, v.Forex_gain, v.Total_cogs, v.Oper_cost, v.Int_exp, v.Comm_exp, v.Biz_tax_surchg, v.Sell_exp, v.Admin_exp, v.Fin_exp, v.Assets_impair_loss, v.Prem_refund, v.Compens_payout, v.Reser_insur_liab, v.Div_payt, v.Reins_exp, v.Oper_exp, v.Compens_payout_refu, v.Insur_reser_refu, v.Reins_cost_refund, v.Other_bus_cost, v.Operate_profit, v.Non_oper_income, v.Non_oper_exp, v.Nca_disploss, v.Total_profit, v.Income_tax, v.N_income, v.N_income_attr_p, v.Minority_gain, v.Oth_compr_income, v.T_compr_income, v.Compr_inc_attr_p, v.Compr_inc_attr_m_s, v.Ebit, v.Ebitda, v.Insurance_exp, v.Undist_profit, v.Distable_profit)
 		} else {
-			panic(fmt.Sprintf("beformaoth = %v ,afterMoth = %v", beforMoth, afterMoth))
+			sql += fmt.Sprintf("(\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f),", v.Ts_code, v.Ann_date, v.F_ann_date, v.End_date, v.Report_type, v.Comp_type, v.Basic_eps, v.Diluted_eps, v.Total_revenue, v.Revenue, v.Int_income, v.Prem_earned, v.Comm_income, v.N_commis_income, v.N_oth_income, v.N_oth_b_income, v.Prem_income, v.Out_prem, v.Une_prem_reser, v.Reins_income, v.N_sec_tb_income, v.N_sec_uw_income, v.N_asset_mg_income, v.Oth_b_income, v.Fv_value_chg_gain, v.Invest_income, v.Ass_invest_income, v.Forex_gain, v.Total_cogs, v.Oper_cost, v.Int_exp, v.Comm_exp, v.Biz_tax_surchg, v.Sell_exp, v.Admin_exp, v.Fin_exp, v.Assets_impair_loss, v.Prem_refund, v.Compens_payout, v.Reser_insur_liab, v.Div_payt, v.Reins_exp, v.Oper_exp, v.Compens_payout_refu, v.Insur_reser_refu, v.Reins_cost_refund, v.Other_bus_cost, v.Operate_profit, v.Non_oper_income, v.Non_oper_exp, v.Nca_disploss, v.Total_profit, v.Income_tax, v.N_income, v.N_income_attr_p, v.Minority_gain, v.Oth_compr_income, v.T_compr_income, v.Compr_inc_attr_p, v.Compr_inc_attr_m_s, v.Ebit, v.Ebitda, v.Insurance_exp, v.Undist_profit, v.Distable_profit)
 		}
-
-		logs.Info("+++ ", saveSlice[i].Data[0], saveSlice[i].Time, saveSlice[i].PerInCome)
 	}
 
-	var totolYearIncome float64 = 0
-	for i := 0; i < 4; i++ {
-		totolYearIncome += saveSlice[i].PerInCome
-	}
-
-	logs.Info("totolYearIncome =", totolYearIncome)
-	logs.Info(fields)
-	logs.Info(items)
-
-	return totolYearIncome
-}
-
-//获取收盘价格
-func GetDateClosePrice(code string, date string) float64 {
-	fields, content, err := GetDailyBasic(code, date)
+	_, err := Engine.Exec(sql)
 	if err != nil {
-		panic("GetDateClosePrice  " + err.Error())
+		panic(err)
+	}
+	if len(stocks)> 0 {
+		logs.Info("SUCCESS",stocks[0].Ts_code)
 	}
 
-	var closePriceIndex int
-	for i := 0; i < len(fields); i++ {
-		if fields[i] == "close" {
-			closePriceIndex = i
-		}
-	}
-
-	v, err := strconv.ParseFloat(content[0][closePriceIndex], 64)
-
-	return v
-
-}
-
-//income  计算四个季度的动态市盈率
-func GetShiYingLv() {
-	var allIncome float64
-	var allMarketValue float64
-
-	now := time.Now().Format("20060102")
-	nowInt, _ := strconv.Atoi(now)
-	nowInt -= 1
-	nowS := strconv.Itoa(nowInt)
-	logs.Info(now)
-
-	for _, v := range stocks.Hongli_etf {
-		//if k>5 {
-		//	break
-		//}
-		codeByte := []byte(v.Code)
-		first := codeByte[0]
-		if first == []byte("6")[0] {
-			v.Code += ".SH"
-		} else if first == []byte("0")[0] {
-			v.Code += ".SZ"
-		}
-
-		perIncome := GetLatestYearPerIncome(v.Code)
-		allIncome += perIncome * v.BuyNums
-
-		currentV := GetDateClosePrice(v.Code, nowS)
-		allMarketValue += v.BuyNums * currentV
-	}
-
-	logs.Info(fmt.Sprintf("%0.2f", allIncome))
-	logs.Info(fmt.Sprintf("%0.2f", allMarketValue))
-	logs.Info(fmt.Sprintf("%0.2f", allIncome/allMarketValue))
 }
 
 //插入所有股票信息到stock_basic数据库
@@ -417,8 +190,10 @@ func UpdateDayTradeData() {
 
 		//UpdateDayTradeDataNext1(stock, sem)
 	}
-
 }
+
+
+
 
 //trade_his  2 插入操作
 func UpdateDayTradeDataNext1(stock *StockBasicInfo, sem chan int) {

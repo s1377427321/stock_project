@@ -2,7 +2,161 @@ package common
 
 import (
 	. "fund/common/structs"
+	"encoding/json"
+	"bytes"
+	"net/http"
+	"io/ioutil"
+	"errors"
+	"reflect"
+	"fmt"
+	"strconv"
 )
+
+//获取收盘价格
+func GetDateClosePrice(code string, date string) float64 {
+	fields, content, err := GetDailyBasic(code, date)
+	if err != nil {
+		panic("GetDateClosePrice  " + err.Error())
+	}
+
+	var closePriceIndex int
+	for i := 0; i < len(fields); i++ {
+		if fields[i] == "close" {
+			closePriceIndex = i
+		}
+	}
+
+	v, err := strconv.ParseFloat(content[0][closePriceIndex], 64)
+
+	return v
+}
+
+//获取TuShare的数据
+func PostToUrl(apiName string, fields string, ps *Params, ) ([]string, [][]string,[]map[string]string, error) {
+	//ps := common.Params{
+	//	Ts_Code:    "002594.SZ",
+	//	Trade_Date: "20180726",
+	//}
+
+	//rp := common.ReqParams{
+	//	ApiName: "daily_basic",
+	//	Token:   common.TOKEN,
+	//	Params:  *ps,
+	//	Fields:  "ts_code,pe,pb,close,total_share,float_share,free_share,total_mv",
+	//}
+
+	rp := ReqParams{
+		ApiName: apiName,
+		Token:   TOKEN,
+		Params:  *ps,
+		Fields:  fields,
+	}
+
+	jsb, err := json.Marshal(rp)
+	if err != nil {
+		panic("json error " + err.Error())
+	}
+
+	//logs.Info("----------", string(jsb))
+
+	req := bytes.NewBuffer(jsb)
+
+	body_type := "application/json;charset=utf-8"
+	resp, err := http.Post(HTTP_URL, body_type, req)
+	body, _ := ioutil.ReadAll(resp.Body)
+	//logs.Info("----------", string(body))
+
+	var dat map[string]interface{}
+	json.Unmarshal(body, &dat)
+	if v, ok := dat["code"]; ok {
+		if v.(float64) != 0 {
+			return nil, nil,nil, errors.New("request error :" + err.Error())
+		}
+	}
+
+	for _, v := range dat {
+		if v != nil {
+			//logs.Info(reflect.TypeOf(v).Kind())
+			if reflect.TypeOf(v).Kind() == reflect.Map {
+
+				f := GetFields(v.(map[string]interface{})["fields"].([]interface{}))
+				items,itmsMap := GetContent(v.(map[string]interface{})["fields"].([]interface{}),v.(map[string]interface{})["items"].([]interface{}))
+				//logs.Info(f)
+				//logs.Info(items)
+				return f, items,itmsMap, nil
+			}
+		}
+	}
+	return nil, nil,nil, errors.New("NOT FIND")
+}
+
+
+
+func GetFields(fields []interface{}) []string {
+	res := make([]string, 0)
+	for _, v := range fields {
+		//logs.Info(k,v)
+		res = append(res, v.(string))
+	}
+
+	return res
+}
+
+func GetContent(fields []interface{},con []interface{}) ([][]string,[]map[string]string) {
+	res := make([][]string, 0)
+	resMaps:= make([]map[string]string,0)
+	for _, v := range con {
+		items := make([]string, 0)
+		for _, vv := range v.([]interface{}) {
+			//logs.Info("+++++++++++++++++")
+			//logs.Info(kk,vv,reflect.TypeOf(vv))
+			if vv == nil {
+				items = append(items, "null")
+				continue
+			}
+			kind := reflect.TypeOf(vv).Kind()
+			var value string
+			switch kind {
+			case reflect.Float64:
+				convv := vv.(float64)
+				value = fmt.Sprintf("%f", convv)
+				//value = strconv.FormatFloat(convv,'E',-1,64)
+				//float,_ := strconv.ParseFloat(value,64)
+				//logs.Info("***** ",value)
+			case reflect.String:
+				value = vv.(string)
+				if value == "" {
+					panic("AAAAAAAAAAAAAA")
+				}
+				//logs.Info("***** ",value)
+			case reflect.Int:
+				convv := vv.(int)
+				value = fmt.Sprintf("%d", convv)
+				if value == "" {
+					panic("AAAAAAAAAAAAAA")
+				}
+			default:
+				panic("GetContent GetContent Error")
+			}
+			items = append(items, value)
+
+		}
+
+		resMap:=make(map[string]string,0)
+		for i:=0;i<len(items);i++ {
+			key:=fields[i].(string)
+			resMap[key] = items[i]
+		}
+
+		res = append(res, items)
+		resMaps = append(resMaps,resMap)
+
+		//fmt.Println(reflect.TypeOf(v))
+		//logs.Info(k,v)
+	}
+	return res,resMaps
+}
+
 
 /*
 ts_code	str	TS股票代码
