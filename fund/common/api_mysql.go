@@ -47,8 +47,9 @@ func GetFields(fields []interface{}) []string {
 	return res
 }
 
-func GetContent(con []interface{}) [][]string {
+func GetContent(fields []interface{},con []interface{}) ([][]string,[]map[string]string) {
 	res := make([][]string, 0)
+	resMaps:= make([]map[string]string,0)
 	for _, v := range con {
 		items := make([]string, 0)
 		for _, vv := range v.([]interface{}) {
@@ -73,18 +74,35 @@ func GetContent(con []interface{}) [][]string {
 					panic("AAAAAAAAAAAAAA")
 				}
 				//logs.Info("***** ",value)
+			case reflect.Int:
+				convv := vv.(int)
+				value = fmt.Sprintf("%d", convv)
+				if value == "" {
+					panic("AAAAAAAAAAAAAA")
+				}
+			default:
+				panic("GetContent GetContent Error")
 			}
 			items = append(items, value)
 
 		}
+
+		resMap:=make(map[string]string,0)
+		for i:=0;i<len(items);i++ {
+			key:=fields[i].(string)
+			resMap[key] = items[i]
+		}
+
 		res = append(res, items)
+		resMaps = append(resMaps,resMap)
+
 		//fmt.Println(reflect.TypeOf(v))
 		//logs.Info(k,v)
 	}
-	return res
+	return res,resMaps
 }
 
-func PostToUrl(apiName string, fields string, ps *Params, ) ([]string, [][]string, error) {
+func PostToUrl(apiName string, fields string, ps *Params, ) ([]string, [][]string,[]map[string]string, error) {
 	//ps := common.Params{
 	//	Ts_Code:    "002594.SZ",
 	//	Trade_Date: "20180726",
@@ -109,20 +127,20 @@ func PostToUrl(apiName string, fields string, ps *Params, ) ([]string, [][]strin
 		panic("json error " + err.Error())
 	}
 
-	logs.Info("----------", string(jsb))
+	//logs.Info("----------", string(jsb))
 
 	req := bytes.NewBuffer(jsb)
 
 	body_type := "application/json;charset=utf-8"
 	resp, err := http.Post(HTTP_URL, body_type, req)
 	body, _ := ioutil.ReadAll(resp.Body)
-	logs.Info("----------", string(body))
+	//logs.Info("----------", string(body))
 
 	var dat map[string]interface{}
 	json.Unmarshal(body, &dat)
 	if v, ok := dat["code"]; ok {
 		if v.(float64) != 0 {
-			return nil, nil, errors.New("request error :" + err.Error())
+			return nil, nil,nil, errors.New("request error :" + err.Error())
 		}
 	}
 
@@ -145,22 +163,22 @@ func PostToUrl(apiName string, fields string, ps *Params, ) ([]string, [][]strin
 				//fmt.Println(reflect.TypeOf(v.(map[string]interface{})["items"]))
 				//fmt.Println(v.(map[string]interface{})["fields"].([]interface{}))
 				f := GetFields(v.(map[string]interface{})["fields"].([]interface{}))
-				items := GetContent(v.(map[string]interface{})["items"].([]interface{}))
+				items,itmsMap := GetContent(v.(map[string]interface{})["fields"].([]interface{}),v.(map[string]interface{})["items"].([]interface{}))
 				//logs.Info(f)
 				//logs.Info(items)
-				return f, items, nil
+				return f, items,itmsMap, nil
 				//return  v.(map[string]interface{})["fields"].(interface{}),v.(map[string]interface{})["items"].([]interface{}),nil
 			}
 		}
 	}
-	return nil, nil, errors.New("NOT FIND")
+	return nil, nil,nil, errors.New("NOT FIND")
 }
 
 //获取最新四个季度的每股收入
 func GetLatestYearPerIncome(code string) float64 {
 	now := time.Now().Format("20060102")
 	logs.Info(now)
-	fields, items, _ := GetIncome(code, "20170101", now)
+	fields, items, _ ,_:= GetIncome(code, "20170101", now)
 	ann_date_index := 0
 	basic_eps := 0
 	for k, v := range fields {
@@ -255,6 +273,7 @@ func GetDateClosePrice(code string, date string) float64 {
 
 }
 
+//income  计算四个季度的动态市盈率
 func GetShiYingLv() {
 	var allIncome float64
 	var allMarketValue float64
@@ -348,6 +367,7 @@ func UpdateAllStocksAndInsertToSQL() {
 	fmt.Println("SQL RowsAffected", en)
 }
 
+//从mysql数据库中获取所有股票
 func GetAllStocksInfo() ([]*StockBasicInfo, error) {
 	resultS := make([]*StockBasicInfo, 0)
 
@@ -365,24 +385,11 @@ func GetAllStocksInfo() ([]*StockBasicInfo, error) {
 	}
 
 	for _, v := range queryR {
-		//jdata, err := json.Marshal(v)
-		//if err != nil {
-		//	panic("NO NO NO")
-		//}
-		//
-		//logs.Info(string(jdata))
 
 		temp := &StockBasicInfo{}
 		common.DataToStruct(v, temp)
-		//err = json.Unmarshal(jdata, temp)
-		//if err != nil {
-		//	panic(err)
-		//}
-
-		logs.Info(temp)
-
+		//logs.Info(temp)
 		resultS = append(resultS, temp)
-
 	}
 
 	return resultS, nil

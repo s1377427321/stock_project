@@ -33,7 +33,7 @@ func GetDailyBasic(code string, date string) ([]string, [][]string, error) {
 		Ts_Code:    code,
 		Trade_Date: date,
 	}
-	fields, items, err := PostToUrl("daily_basic", filds, ps)
+	fields, items, _, err := PostToUrl("daily_basic", filds, ps)
 
 	if err != nil {
 		return nil, nil, err
@@ -109,8 +109,8 @@ insurance_exp	float	保险业务支出
 undist_profit	float	年初未分配利润
 distable_profit	float	可分配利润
  */
-func GetIncome(code, startDate, endDate string) ([]string, [][]string, error) {
-	filds := "ts_code,ann_date,n_income,n_income_attr_p,compr_inc_attr_p,compr_inc_attr_m_s,basic_eps,diluted_eps"
+func GetIncome(code, startDate, endDate string) ([]string, [][]string, []map[string]string, error) {
+	filds := "ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,basic_eps,diluted_eps,total_revenue,revenue,int_income,prem_earned,comm_income,n_commis_income,n_oth_income,n_oth_b_income,prem_income,out_prem,une_prem_reser,reins_income,n_sec_tb_income,n_sec_uw_income,n_asset_mg_income,oth_b_income,fv_value_chg_gain,invest_income,ass_invest_income,forex_gain,total_cogs,oper_cost,int_exp,comm_exp,biz_tax_surchg,sell_exp,admin_exp,fin_exp,assets_impair_loss,prem_refund,compens_payout,reser_insur_liab,div_payt,reins_exp,oper_exp,compens_payout_refu,insur_reser_refu,reins_cost_refund,other_bus_cost,operate_profit,non_oper_income,non_oper_exp,nca_disploss,total_profit,income_tax,n_income,n_income_attr_p,minority_gain,oth_compr_income,t_compr_income,compr_inc_attr_p,compr_inc_attr_m_s,ebit,ebitda,insurance_exp,undist_profit,distable_profit"
 	//ps := &Params{
 	//	Ts_Code:    "002594.SZ",
 	//	Trade_Date: "20180726",
@@ -120,13 +120,13 @@ func GetIncome(code, startDate, endDate string) ([]string, [][]string, error) {
 		Start_Date: startDate,
 		End_Date:   endDate,
 	}
-	fields, items, err := PostToUrl("income", filds, ps)
+	fields, items, itemsMap, err := PostToUrl("income", filds, ps)
 
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	return fields, items, nil
+	return fields, items, itemsMap, nil
 }
 
 //获取所有股票的代码，及相关信息
@@ -134,10 +134,10 @@ func GetAllStocksCode() ([]string, [][]string, error) {
 	filds := "ts_code,symbol,name,area,industry,fullname,enname,market,exchange,curr_type,list_status,list_date,delist_date,is_hs"
 
 	ps := &Params{
-		List_Status:"L",
-		Exchange:"",
+		List_Status: "L",
+		Exchange:    "",
 	}
-	fields, items, err := PostToUrl("stock_basic", filds, ps)
+	fields, items, _, err := PostToUrl("stock_basic", filds, ps)
 
 	if err != nil {
 		return nil, nil, err
