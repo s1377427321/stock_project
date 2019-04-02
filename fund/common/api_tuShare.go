@@ -10,6 +10,9 @@ import (
 	"reflect"
 	"fmt"
 	"strconv"
+	commons "common"
+	"github.com/astaxie/beego/logs"
+	"time"
 )
 
 //获取收盘价格
@@ -32,7 +35,7 @@ func GetDateClosePrice(code string, date string) float64 {
 }
 
 //获取TuShare的数据
-func PostToUrl(apiName string, fields string, ps *Params, ) ([]string, [][]string,[]map[string]string, error) {
+func PostToUrl(apiName string, fields string, ps *Params, ) ([]string, [][]string, []map[string]string, error) {
 	//ps := common.Params{
 	//	Ts_Code:    "002594.SZ",
 	//	Trade_Date: "20180726",
@@ -57,20 +60,20 @@ func PostToUrl(apiName string, fields string, ps *Params, ) ([]string, [][]strin
 		panic("json error " + err.Error())
 	}
 
-	//logs.Info("----------", string(jsb))
+	logs.Info("----------", string(jsb))
 
 	req := bytes.NewBuffer(jsb)
 
 	body_type := "application/json;charset=utf-8"
 	resp, err := http.Post(HTTP_URL, body_type, req)
 	body, _ := ioutil.ReadAll(resp.Body)
-	//logs.Info("----------", string(body))
+	logs.Info("----------", string(body))
 
 	var dat map[string]interface{}
 	json.Unmarshal(body, &dat)
 	if v, ok := dat["code"]; ok {
 		if v.(float64) != 0 {
-			return nil, nil,nil, errors.New("request error :" + err.Error())
+			return nil, nil, nil, errors.New("request error :" + err.Error())
 		}
 	}
 
@@ -80,17 +83,15 @@ func PostToUrl(apiName string, fields string, ps *Params, ) ([]string, [][]strin
 			if reflect.TypeOf(v).Kind() == reflect.Map {
 
 				f := GetFields(v.(map[string]interface{})["fields"].([]interface{}))
-				items,itmsMap := GetContent(v.(map[string]interface{})["fields"].([]interface{}),v.(map[string]interface{})["items"].([]interface{}))
+				items, itmsMap := GetContent(v.(map[string]interface{})["fields"].([]interface{}), v.(map[string]interface{})["items"].([]interface{}))
 				//logs.Info(f)
 				//logs.Info(items)
-				return f, items,itmsMap, nil
+				return f, items, itmsMap, nil
 			}
 		}
 	}
-	return nil, nil,nil, errors.New("NOT FIND")
+	return nil, nil, nil, errors.New("NOT FIND")
 }
-
-
 
 func GetFields(fields []interface{}) []string {
 	res := make([]string, 0)
@@ -102,9 +103,9 @@ func GetFields(fields []interface{}) []string {
 	return res
 }
 
-func GetContent(fields []interface{},con []interface{}) ([][]string,[]map[string]string) {
+func GetContent(fields []interface{}, con []interface{}) ([][]string, []map[string]string) {
 	res := make([][]string, 0)
-	resMaps:= make([]map[string]string,0)
+	resMaps := make([]map[string]string, 0)
 	for _, v := range con {
 		items := make([]string, 0)
 		for _, vv := range v.([]interface{}) {
@@ -142,21 +143,20 @@ func GetContent(fields []interface{},con []interface{}) ([][]string,[]map[string
 
 		}
 
-		resMap:=make(map[string]string,0)
-		for i:=0;i<len(items);i++ {
-			key:=fields[i].(string)
+		resMap := make(map[string]string, 0)
+		for i := 0; i < len(items); i++ {
+			key := fields[i].(string)
 			resMap[key] = items[i]
 		}
 
 		res = append(res, items)
-		resMaps = append(resMaps,resMap)
+		resMaps = append(resMaps, resMap)
 
 		//fmt.Println(reflect.TypeOf(v))
 		//logs.Info(k,v)
 	}
-	return res,resMaps
+	return res, resMaps
 }
-
 
 /*
 ts_code	str	TS股票代码
@@ -298,4 +298,89 @@ func GetAllStocksCode() ([]string, [][]string, error) {
 	}
 
 	return fields, items, nil
+}
+
+//获取股票概念信息
+func SaveConceptInfosToMySQL() {
+
+	ps := &Params{}
+
+	_, _, mapRes, err := PostToUrl("concept", "", ps)
+
+	if err != nil {
+		return
+	}
+
+	concepts := make([]*StockConcept, 0)
+
+	for i := 0; i < len(mapRes); i++ {
+		temp := &StockConcept{}
+		commons.DataToStruct(mapRes[i], temp)
+		concepts = append(concepts, temp)
+	}
+
+	sql := "replace into stock_concept(`concept_code`,`name`,`src`)VALUES"
+
+	for i := 0; i < len(concepts); i++ {
+		v := concepts[i]
+		var tempStr string
+		if i == len(concepts)-1 {
+			tempStr = fmt.Sprintf("(\"%s\",\"%s\",\"%s\");", v.Code, v.Name, v.Src)
+		} else {
+			tempStr = fmt.Sprintf("(\"%s\",\"%s\",\"%s\"),", v.Code, v.Name, v.Src)
+		}
+		sql += tempStr
+	}
+
+	_, err = Engine.Exec(sql)
+	if err != nil {
+		logs.Error(err)
+	}
+}
+
+//获取股票概念信息对应的股票，并且存储到数据库中
+func SaveConceptDetailInfosToMySQL() {
+
+	allConcepts := GetConceptInfosFromMySQL()
+
+	for _, v := range allConcepts {
+		ps := &Params{
+			Id: v.Code,
+		}
+
+		_, _, mapRes, err := PostToUrl("concept_detail", "ts_code,name,in_date,out_date", ps)
+
+		if err != nil {
+			return
+		}
+
+		logs.Info(mapRes)
+
+		var tempSql string = ""
+		sql := "replace into stock_concept_detail(`concept_code`,`ts_code`,`name`,`out_date`,`in_date`)VALUES"
+		//mapConceptDetails := make([]*StockConceptDetail, 0)
+		for i := 0; i < len(mapRes); i++ {
+			vv := mapRes[i]
+			temp := &StockConceptDetail{}
+			commons.DataToStruct(vv, temp)
+			//mapConceptDetails = append(mapConceptDetails,temp)
+
+			if i == len(mapRes)-1 {
+				tempSql = fmt.Sprintf("(\"%s\",\"%s\",\"%s\",\"%s\",\"%s\");", v.Code, temp.TsCode, temp.Name, temp.OutDate, temp.InDate)
+			} else {
+				tempSql = fmt.Sprintf("(\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"),", v.Code, temp.TsCode, temp.Name, temp.OutDate, temp.InDate)
+			}
+			sql += tempSql
+
+		}
+
+		_, err = Engine.Exec(sql)
+		if err != nil {
+			panic(fmt.Sprintf("Engine.Exec %v Error %v", sql, err))
+		}
+
+		time.Sleep(1*time.Second)
+
+	}
+
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 	"strconv"
 	"runtime"
+	"io/ioutil"
 )
 
 type IntSlice []int
@@ -168,8 +169,8 @@ func DataToStruct(data map[string]string, out interface{}) {
 				i, err = strconv.Atoi(val)
 				//  fmt.Println("i:", i, name)
 				if err != nil {
-					logs.Info("can't not atoi:%v", val)
-					panic(err)
+					//logs.Info("can't not atoi:%v", val)
+					//panic(err)
 					continue
 				}
 			}
@@ -184,8 +185,8 @@ func DataToStruct(data map[string]string, out interface{}) {
 				i, err = strconv.Atoi(val)
 				//  fmt.Println("i:", i, name)
 				if err != nil {
-					logs.Info("can't not atoi:%v", val)
-					panic(err)
+					//logs.Info("can't not atoi:%v", val)
+					//panic(err)
 					continue
 				}
 			}
@@ -199,8 +200,8 @@ func DataToStruct(data map[string]string, out interface{}) {
 			} else {
 				f, err = strconv.ParseFloat(val, 64)
 				if err != nil {
-					logs.Info("can't not ParseFloat:%v", val)
-					panic(err)
+					//logs.Info("can't not ParseFloat:%v", val)
+					//panic(err)
 					continue
 				}
 			}
@@ -230,4 +231,34 @@ func GetPanicInfo() string {
 	des := fmt.Sprintf("%s", buf[:n])
 	logs.Error("GetPanicInfo error ", des)
 	return des
+}
+
+
+
+func TsCodeToCode(codeStr string) string  {
+	tempCode:=[]byte(codeStr)
+	tempCode = tempCode[0:6]
+	return string(tempCode)
+}
+
+func WriteWithIoutil(name,content string) {
+
+	fpath := GetApplicationPosition()
+	fpath += "/"+name
+
+	data :=  []byte(content)
+	if ioutil.WriteFile(fpath,data,0644) == nil {
+		fmt.Println("写入文件成功:",content)
+	}
+}
+
+func GetApplicationPosition() string  {
+	dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
+	if err != nil {
+		logs.Error(err)
+	}
+	dir = strings.Replace(dir, "\\", "/", -1)
+
+	filePath := dir
+	return filePath
 }

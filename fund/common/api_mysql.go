@@ -10,15 +10,14 @@ import (
 	. "fund/common/structs"
 		"github.com/go-xorm/xorm"
 	"common"
-	"log"
-	"stock_statistics/constant"
+		"stock_statistics/constant"
 	"github.com/axgle/mahonia"
 	"encoding/csv"
 	"strings"
 	"io"
 
 	commons "common"
-)
+	)
 
 var Engine *xorm.Engine
 
@@ -54,7 +53,7 @@ func SaveIncomeDatasToMySQL() {
 		}
 
 		SaveIncomeDatasToMySQL2(stockItems)
-		time.Sleep(1*time.Second)
+		time.Sleep(1000*time.Millisecond)
 	}
 }
 
@@ -144,11 +143,11 @@ func UpdateAllStocksAndInsertToSQL() {
 func GetAllStocksInfo() ([]*StockBasicInfo, error) {
 	resultS := make([]*StockBasicInfo, 0)
 
-	Engine, err := xorm.NewEngine("mysql", SQLParams)
-	if err != nil {
-		panic(err)
-	}
-	defer Engine.Close()
+	//Engine, err := xorm.NewEngine("mysql", SQLParams)
+	//if err != nil {
+	//	panic(err)
+	//}
+	//defer Engine.Close()
 
 	sqlS := fmt.Sprintf("SELECT * from stock_basic;")
 	queryR, err := Engine.QueryString(sqlS)
@@ -198,7 +197,8 @@ func UpdateDayTradeData() {
 //trade_his  2 插入操作
 func UpdateDayTradeDataNext1(stock *StockBasicInfo, sem chan int) {
 	defer commons.RecoverPanic()
-	lastestStocksInfo := GetLatestDayStock(stock)
+	lastestStocksInfos := GetLatestDayStock(stock.Symbol,1)
+	lastestStocksInfo :=lastestStocksInfos[0]
 
 	now := time.Now().Format("20060102")
 	var added []*DialyStockInfo
@@ -209,11 +209,11 @@ func UpdateDayTradeDataNext1(stock *StockBasicInfo, sem chan int) {
 		last, _ := time.Parse("2006-01-02", lastestStocksInfo.Date)
 		// init today
 		from := time.Unix(last.Unix()+3600*24*1, 0).Format("20060102")
-		if from == now {
-			log.Println("not data need insert ", lastestStocksInfo.Code)
-			sem <- 1
-			return
-		}
+		//if from == now {
+		//	log.Println("not data need insert ", lastestStocksInfo.Code)
+		//	sem <- 1
+		//	return
+		//}
 
 		added = GetDailTradeFromCSV(stock, from, now)
 	}
@@ -230,24 +230,27 @@ func UpdateDayTradeDataNext1(stock *StockBasicInfo, sem chan int) {
 }
 
 //trade_his  3 获取最近一天记录到数据库的数据，为了更新数据用
-func GetLatestDayStock(stock *StockBasicInfo) *DialyStockInfo {
+func GetLatestDayStock(codeStr string ,dayNums int) []*DialyStockInfo {
 	sqlStr := `
-	SELECT * FROM trade_his WHERE code=%d ORDER BY date DESC LIMIT 1;
+	SELECT * FROM trade_his WHERE code=%d ORDER BY date DESC LIMIT %d;
 	`
-	code, err := strconv.Atoi(stock.Symbol)
+	code, err := strconv.Atoi(codeStr)
 	if err != nil {
-		panic(fmt.Sprintf("%v strconv.Atoi error %v", stock.Symbol, err))
+		panic(fmt.Sprintf("%v strconv.Atoi error %v", codeStr, err))
 	}
 
-	sql := fmt.Sprintf(sqlStr, code)
+	sql := fmt.Sprintf(sqlStr, code,dayNums)
 	sqlResult, err := Engine.QueryString(sql)
 	if err != nil || sqlResult == nil {
 		return nil
 	}
 
-	ret := &DialyStockInfo{}
-
-	commons.DataToStruct(sqlResult[0], ret)
+	ret := make([]*DialyStockInfo,0)
+	for i:=0;i<len(sqlResult);i++ {
+		temp:=&DialyStockInfo{}
+		commons.DataToStruct(sqlResult[i], temp)
+		ret = append(ret,temp)
+	}
 
 	return ret
 }
@@ -343,4 +346,67 @@ func InsertTradeHis(stockInfos []*DialyStockInfo) {
 		logs.Error(sql)
 		panic(fmt.Sprintf("%v ERROR %v", "Engine.Exec", err))
 	}
+}
+
+//根据中文的名字去查找所属概率的codeID
+//reres:=common.FindConceptCode([]string{"水泥","医药","酒业","环保","钢铁","银行","建筑","装饰"})
+func FindConceptCode(findStr []string) []*StockConcept  {
+	ret:=make([]*StockConcept , 0)
+
+	for _,v:=range findStr{
+		sqls:="SELECT * FROM stock_concept WHERE name LIKE"+"'%"+v+"%';"
+		qresut,err:= Engine.QueryString(sqls)
+		if err!=nil {
+			logs.Error("++++++++++++++++++++",v)
+			continue
+		}
+		for _,vv:=range qresut{
+			temp:=&StockConcept{}
+			commons.DataToStruct(vv,temp)
+
+			ret = append(ret,temp)
+		}
+
+	}
+
+	return ret
+}
+
+func GetConceptInfosFromMySQL() []*StockConcept  {
+	ret:=make([]*StockConcept,0)
+
+	sql:="SELECT * FROM stock_concept;"
+
+	sqlRes,err:=Engine.QueryString(sql)
+	if err != nil {
+		panic(fmt.Sprintf("GetConceptInfosFromMySQL ERROR %v",err))
+	}
+
+	for _,v:=range sqlRes{
+		temp:=&StockConcept{}
+		commons.DataToStruct(v,temp)
+		ret = append(ret,temp)
+	}
+
+	return ret
+}
+
+//通过给定的概念ID找到对应的股票
+func GetConceptDetailInfosByIdFromMySQL(conceptID string) []*StockConceptDetail  {
+	ret:=make([]*StockConceptDetail,0)
+
+	sql:=fmt.Sprintf("SELECT * FROM stock_concept_detail WHERE concept_code=\"%s\" ;",conceptID)
+
+	sqlRes,err:=Engine.QueryString(sql)
+	if err != nil {
+		panic(fmt.Sprintf("GetConceptInfosFromMySQL ERROR %v",err))
+	}
+
+	for _,v:=range sqlRes{
+		temp:=&StockConceptDetail{}
+		commons.DataToStruct(v,temp)
+		ret = append(ret,temp)
+	}
+
+	return ret
 }
