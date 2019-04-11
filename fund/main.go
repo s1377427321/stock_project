@@ -2,39 +2,57 @@ package main
 
 import (
 	_ "github.com/go-sql-driver/mysql"
-	_ "fund/common/structs"
-	"fund/common"
+		"fund/common/good_company"
+	"time"
 )
 
 func main() {
+	gm := &good_company.GoodCompanyManager{
+		Companys: make(map[string]*good_company.GoodCompany, 0),
+	}
 
-	//common.SaveConceptDetailInfosToMySQL()
-	//reres:=common.FindConceptCode([]string{"水泥","医药","酒业","环保","钢铁","银行","建筑","装饰"})
-	//logs.Info(reres)
-	//common.SaveConceptInfosToMySQL()
-	//common.GetAllStocksInfo()
-	//common.UpdateDayTradeData()
-	//common.GetDealBuyStaticsInfos()
-	//common.GetDealBuyStaticsInfos()
-	//common.SaveIncomeDatasToMySQL()
+	gm.Start()
 
-
-
-	//howMuchRice := 0.20
-	//riceHowMuchDay := 80
-	//var yearIncome float64 = 1000000000
-	//
-	//common.FindIncomeGood("601988.SH", howMuchRice, riceHowMuchDay, yearIncome)
-
-	//common.FindConceptIncomeGood()
-
-	common.FindHowMuchDayPriceUpOrDown()
-
-	//更新每日
-	//common.UpdateDayTradeData()
-
-	//HuiCheDaYu20YiShang()
+	for range time.NewTicker(time.Hour*10).C{
+	}
 }
+
+//
+//func main() {
+//
+//	//common.SaveConceptDetailInfosToMySQL()
+//	//reres:=common.FindConceptCode([]string{"水泥","医药","酒业","环保","钢铁","银行","建筑","装饰"})
+//	//logs.Info(reres)
+//	//common.SaveConceptInfosToMySQL()
+//	//common.GetAllStocksInfo()
+//	//common.UpdateDayTradeData()
+//	//common.GetDealBuyStaticsInfos()
+//	//common.GetDealBuyStaticsInfos()
+//	//common.SaveIncomeDatasToMySQL()
+//
+//
+//
+//	//howMuchRice := 0.20
+//	//riceHowMuchDay := 80
+//	//var yearIncome float64 = 1000000000
+//	//
+//	//common.FindIncomeGood("601988.SH", howMuchRice, riceHowMuchDay, yearIncome)
+//
+//	//common.FindConceptIncomeGood()
+//
+//
+//
+//	common.SaveFinaIndicatorFromTuShare()
+//
+//
+//
+//	//common.FindHowMuchDayPriceUpOrDown()
+//
+//	//更新每日
+//	//common.UpdateDayTradeData()
+//
+//	//HuiCheDaYu20YiShang()
+//}
 
 //func BuyTest() {
 //	Monney := 100000

@@ -379,8 +379,129 @@ func SaveConceptDetailInfosToMySQL() {
 			panic(fmt.Sprintf("Engine.Exec %v Error %v", sql, err))
 		}
 
-		time.Sleep(1*time.Second)
+		time.Sleep(1 * time.Second)
 
 	}
 
+}
+
+func GetStockBalanceSheetFromTuShare(code, startDate, endDate string) ([]string, [][]string, []map[string]string, error) {
+
+	ps := &Params{
+		Ts_Code:    code,
+		Start_Date:   startDate,
+		End_Date: endDate,
+	}
+
+	fields, items, itemsMap, err := PostToUrl("balancesheet", "ts_code,f_ann_date,end_date,total_share", ps)
+
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return fields, items, itemsMap, err
+
+}
+
+//type StockBalanceSheet struct {
+//	Ts_code     string  `json:"ts_code"`
+//	F_ann_date  string  `json:"f_ann_date"`
+//	End_date    string  `json:"end_date"`
+//	Total_share float64 `json:"total_share"`
+//}
+
+
+func GetFinaIndicatorFromTuShare(code, startDate, endDate string) ([]string, [][]string, []map[string]string, error) {
+
+	ps := &Params{
+		Ts_Code:    code,
+		Start_Date:   startDate,
+		End_Date: endDate,
+	}
+
+	fields, items, itemsMap, err := PostToUrl("fina_indicator", "", ps)
+
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return fields, items, itemsMap, err
+
+}
+
+func SaveFinaIndicatorFromTuShare() {
+	now := time.Now().Format("20060102")
+	befor:="20000101"
+	logs.Info(now)
+
+	stocks, err := GetAllStocksInfo()
+	if err != nil {
+		panic(err)
+	}
+
+	for _, v := range stocks {
+		_, _, finaIndicatordatas, err := GetFinaIndicatorFromTuShare(v.TsCode, befor, now)
+		if err != nil {
+			fmt.Errorf(err.Error())
+			continue
+		}
+
+		_, _, balanceSheetdatas, err := GetStockBalanceSheetFromTuShare(v.TsCode, befor, now)
+		if err != nil {
+			fmt.Errorf(err.Error())
+			continue
+		}
+
+		stockBalanceSheets:=make(map[string]*StockBalanceSheet,0)
+		for _, vv := range balanceSheetdatas {
+			temp := &StockBalanceSheet{}
+
+			commons.DataToStruct(vv, temp)
+
+			stockBalanceSheets[temp.End_date] = temp
+		}
+
+		stockDatas := make([]*StockFinaIndicator, 0)
+		for _, vv := range finaIndicatordatas {
+			temp := &StockFinaIndicator{}
+
+			commons.DataToStruct(vv, temp)
+
+			var total float64 = 0
+			if sbs,ok:= stockBalanceSheets[temp.End_date];ok{
+				total = sbs.Total_share
+			}
+
+
+			//totol:=stockBalanceSheets[temp.End_date].Total_share
+			temp.Total_share = total
+			stockDatas = append(stockDatas, temp)
+		}
+
+		//fmt.Println(stockDatas)
+
+		var tempSql string = ""
+		sql := "replace into stock_fina_indicator(`ts_code`,`ann_date`,`end_date`,`roe`,`roe_waa`,`roe_dt`,`roe_yearly`,`roe_avg`,`q_roe`,`q_dt_roe`,`roe_yoy`,`netprofit_margin`,`grossprofit_margin`,`profit_to_gr`,`op_of_gr`,`q_netprofit_margin`,`q_gsprofit_margin`,`q_profit_to_gr`,`q_op_to_gr`,`total_share`)VALUES"
+		//mapConceptDetails := make([]*StockConceptDetail, 0)
+		for i := 0; i < len(stockDatas); i++ {
+			value := stockDatas[i]
+			//temp := &StockConceptDetail{}
+			//commons.DataToStruct(vv, temp)
+			//mapConceptDetails = append(mapConceptDetails,temp)
+
+			if i == len(stockDatas)-1 {
+				tempSql = fmt.Sprintf("(\"%s\",\"%s\",\"%s\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\");", value.Ts_code, value.Ann_date, value.End_date, value.Roe,value.Roe_waa,value.Roe_dt,value.Roe_yearly,value.Roe_avg,value.Q_roe,value.Q_dt_roe,value.Roe_yoy,value.Netprofit_margin,value.Grossprofit_margin,value.Profit_to_gr,value.Op_of_gr,value.Q_netprofit_margin,value.Q_gsprofit_margin,value.Q_profit_to_gr,value.Q_op_to_gr,value.Total_share)
+			} else {
+				tempSql = fmt.Sprintf("(\"%s\",\"%s\",\"%s\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\",\"%f\"),", value.Ts_code, value.Ann_date, value.End_date, value.Roe,value.Roe_waa,value.Roe_dt,value.Roe_yearly,value.Roe_avg,value.Q_roe,value.Q_dt_roe,value.Roe_yoy,value.Netprofit_margin,value.Grossprofit_margin,value.Profit_to_gr,value.Op_of_gr,value.Q_netprofit_margin,value.Q_gsprofit_margin,value.Q_profit_to_gr,value.Q_op_to_gr,value.Total_share)
+			}
+			sql += tempSql
+
+		}
+
+		_, err = Engine.Exec(sql)
+		if err != nil {
+			panic(fmt.Sprintf("Engine.Exec %v Error %v", sql, err))
+		}
+		time.Sleep(1 * time.Second)
+	}
 }

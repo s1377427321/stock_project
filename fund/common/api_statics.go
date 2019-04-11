@@ -164,7 +164,7 @@ func FindHowMuchDayPriceUpOrDown() {
 //查找指定天数内，股价上涨不超过多少的股票 2
 //查找指定代码的的Income数据
 func QueryMySQLStockIncome(stock string) StockInComes {
-	sql := fmt.Sprintf("SELECT ts_code,end_date,n_income_attr_p FROM stock_income where ts_code=\"%s\"", stock)
+	sql := fmt.Sprintf("SELECT ts_code,end_date,n_income_attr_p FROM stock_income where ts_code=\"%s\"  ORDER BY end_date  DESC", stock)
 	res, err := Engine.QueryString(sql)
 	if err != nil {
 		panic("AAAAAAAAAAAAAAA" + err.Error())
@@ -186,7 +186,7 @@ func FindIncomeGood(tsCode, name string, howMuchRice float64, riceHowMuchDay int
 
 	incomes := QueryMySQLStockIncome(tsCode)
 	incomesLen := len(incomes)
-	if  incomesLen/4 < 4 {
+	if incomesLen/4 < 4 {
 		return nil, false
 	}
 
@@ -231,23 +231,22 @@ func FindIncomeGood(tsCode, name string, howMuchRice float64, riceHowMuchDay int
 			continue
 		}
 
-		okNum:=(i+1)
+		okNum := (i + 1)
 		if okNum/4 > yearIndex {
 			temp := yearWin
 			yearWins = append(yearWins, temp)
 			yearWin = 0
-			yearIndex +=1
+			yearIndex += 1
 		}
 	}
 
 	isSelect := true
-	for i:=0;i<4;i++ {
+	for i := 0; i < 4; i++ {
 		if yearWins[i] < yearIncome {
 			isSelect = false
 			break
 		}
 	}
-
 
 	if incomes[0].Ts_code == "000895.SZ" {
 		fmt.Println()
@@ -360,3 +359,31 @@ func FindConceptIncomeGood() {
 	commons.WriteWithIoutil("BBB.txt", FindResults)
 
 }
+
+////好公司
+//func GoodCompanys() {
+//	stocks, err := GetAllStocksInfo()
+//	if err != nil {
+//		panic(err)
+//	}
+//
+//	FindResults := ""
+//	result := make(IncomeGoodSS, 0)
+//	nowtime := time.Now().Format("20160302")
+//
+//	//map key 公司id value公司总股份
+//	goodCompanys:=make(map[string]float64,0)
+//	for _, v := range stocks {
+//		finas := GetFinaIndicatorFromMySQL(v.TsCode, "20000101", nowtime)
+//		if finas == nil {
+//			//logs.Info(res)
+//			//FindResults = append(FindResults,res)
+//			//FindResults +="\n"+"\n"+ res + "\n"+"\n"
+//			logs.Error(fmt.Sprintf("%s not find",v.TsCode))
+//		}
+//
+//
+//
+//
+//	}
+//}

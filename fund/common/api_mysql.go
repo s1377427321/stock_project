@@ -8,16 +8,17 @@ import (
 	"time"
 	"strconv"
 	. "fund/common/structs"
-		"github.com/go-xorm/xorm"
+	"github.com/go-xorm/xorm"
 	"common"
-		"stock_statistics/constant"
+	"stock_statistics/constant"
 	"github.com/axgle/mahonia"
 	"encoding/csv"
 	"strings"
 	"io"
 
 	commons "common"
-	)
+	"log"
+)
 
 var Engine *xorm.Engine
 
@@ -30,7 +31,6 @@ func init() {
 	}
 }
 
-
 func SaveIncomeDatasToMySQL() {
 	stocks, err := GetAllStocksInfo()
 	if err != nil {
@@ -41,7 +41,7 @@ func SaveIncomeDatasToMySQL() {
 	for _, v := range stocks {
 		_, _, itemsMap, err := GetIncome(v.TsCode, startDate, now)
 		if err != nil {
-			logs.Error("Not SUCCESS ",v.TsCode)
+			logs.Error("Not SUCCESS ", v.TsCode)
 			continue
 		}
 		stockItems := make([]*StockIncome, 0)
@@ -53,7 +53,7 @@ func SaveIncomeDatasToMySQL() {
 		}
 
 		SaveIncomeDatasToMySQL2(stockItems)
-		time.Sleep(1000*time.Millisecond)
+		time.Sleep(1000 * time.Millisecond)
 	}
 }
 
@@ -74,8 +74,8 @@ func SaveIncomeDatasToMySQL2(stocks []*StockIncome) {
 	if err != nil {
 		panic(err)
 	}
-	if len(stocks)> 0 {
-		logs.Info("SUCCESS",stocks[0].Ts_code)
+	if len(stocks) > 0 {
+		logs.Info("SUCCESS", stocks[0].Ts_code)
 	}
 
 }
@@ -168,7 +168,7 @@ func GetAllStocksInfo() ([]*StockBasicInfo, error) {
 }
 
 //trade_his  1  从网络获取个股股价等信息，插入表trade_his中
-func UpdateDayTradeData() {
+func UpdateDayTradeData() []*StockBasicInfo{
 	stocks, err := GetAllStocksInfo()
 	if err != nil {
 		panic(err)
@@ -189,16 +189,14 @@ func UpdateDayTradeData() {
 
 		//UpdateDayTradeDataNext1(stock, sem)
 	}
+	return stocks
 }
-
-
-
 
 //trade_his  2 插入操作
 func UpdateDayTradeDataNext1(stock *StockBasicInfo, sem chan int) {
 	defer commons.RecoverPanic()
-	lastestStocksInfos := GetLatestDayStock(stock.Symbol,1)
-	lastestStocksInfo :=lastestStocksInfos[0]
+	lastestStocksInfos := GetLatestDayStock(stock.Symbol, 1)
+	lastestStocksInfo := lastestStocksInfos[0]
 
 	now := time.Now().Format("20060102")
 	var added []*DialyStockInfo
@@ -208,12 +206,12 @@ func UpdateDayTradeDataNext1(stock *StockBasicInfo, sem chan int) {
 	} else {
 		last, _ := time.Parse("2006-01-02", lastestStocksInfo.Date)
 		// init today
-		from := time.Unix(last.Unix()+3600*24*1, 0).Format("20060102")
-		//if from == now {
-		//	log.Println("not data need insert ", lastestStocksInfo.Code)
-		//	sem <- 1
-		//	return
-		//}
+		from := time.Unix(last.Unix(), 0).Format("20060102")
+		if from == now {
+			log.Println("not data need insert ", lastestStocksInfo.Code)
+			sem <- 1
+			return
+		}
 
 		added = GetDailTradeFromCSV(stock, from, now)
 	}
@@ -230,7 +228,7 @@ func UpdateDayTradeDataNext1(stock *StockBasicInfo, sem chan int) {
 }
 
 //trade_his  3 获取最近一天记录到数据库的数据，为了更新数据用
-func GetLatestDayStock(codeStr string ,dayNums int) []*DialyStockInfo {
+func GetLatestDayStock(codeStr string, dayNums int) []*DialyStockInfo {
 	sqlStr := `
 	SELECT * FROM trade_his WHERE code=%d ORDER BY date DESC LIMIT %d;
 	`
@@ -239,17 +237,17 @@ func GetLatestDayStock(codeStr string ,dayNums int) []*DialyStockInfo {
 		panic(fmt.Sprintf("%v strconv.Atoi error %v", codeStr, err))
 	}
 
-	sql := fmt.Sprintf(sqlStr, code,dayNums)
+	sql := fmt.Sprintf(sqlStr, code, dayNums)
 	sqlResult, err := Engine.QueryString(sql)
 	if err != nil || sqlResult == nil {
 		return nil
 	}
 
-	ret := make([]*DialyStockInfo,0)
-	for i:=0;i<len(sqlResult);i++ {
-		temp:=&DialyStockInfo{}
+	ret := make([]*DialyStockInfo, 0)
+	for i := 0; i < len(sqlResult); i++ {
+		temp := &DialyStockInfo{}
 		commons.DataToStruct(sqlResult[i], temp)
-		ret = append(ret,temp)
+		ret = append(ret, temp)
 	}
 
 	return ret
@@ -350,21 +348,21 @@ func InsertTradeHis(stockInfos []*DialyStockInfo) {
 
 //根据中文的名字去查找所属概率的codeID
 //reres:=common.FindConceptCode([]string{"水泥","医药","酒业","环保","钢铁","银行","建筑","装饰"})
-func FindConceptCode(findStr []string) []*StockConcept  {
-	ret:=make([]*StockConcept , 0)
+func FindConceptCode(findStr []string) []*StockConcept {
+	ret := make([]*StockConcept, 0)
 
-	for _,v:=range findStr{
-		sqls:="SELECT * FROM stock_concept WHERE name LIKE"+"'%"+v+"%';"
-		qresut,err:= Engine.QueryString(sqls)
-		if err!=nil {
-			logs.Error("++++++++++++++++++++",v)
+	for _, v := range findStr {
+		sqls := "SELECT * FROM stock_concept WHERE name LIKE" + "'%" + v + "%';"
+		qresut, err := Engine.QueryString(sqls)
+		if err != nil {
+			logs.Error("++++++++++++++++++++", v)
 			continue
 		}
-		for _,vv:=range qresut{
-			temp:=&StockConcept{}
-			commons.DataToStruct(vv,temp)
+		for _, vv := range qresut {
+			temp := &StockConcept{}
+			commons.DataToStruct(vv, temp)
 
-			ret = append(ret,temp)
+			ret = append(ret, temp)
 		}
 
 	}
@@ -372,40 +370,62 @@ func FindConceptCode(findStr []string) []*StockConcept  {
 	return ret
 }
 
-func GetConceptInfosFromMySQL() []*StockConcept  {
-	ret:=make([]*StockConcept,0)
+func GetConceptInfosFromMySQL() []*StockConcept {
+	ret := make([]*StockConcept, 0)
 
-	sql:="SELECT * FROM stock_concept;"
+	sql := "SELECT * FROM stock_concept;"
 
-	sqlRes,err:=Engine.QueryString(sql)
+	sqlRes, err := Engine.QueryString(sql)
 	if err != nil {
-		panic(fmt.Sprintf("GetConceptInfosFromMySQL ERROR %v",err))
+		panic(fmt.Sprintf("GetConceptInfosFromMySQL ERROR %v", err))
 	}
 
-	for _,v:=range sqlRes{
-		temp:=&StockConcept{}
-		commons.DataToStruct(v,temp)
-		ret = append(ret,temp)
+	for _, v := range sqlRes {
+		temp := &StockConcept{}
+		commons.DataToStruct(v, temp)
+		ret = append(ret, temp)
 	}
 
 	return ret
 }
 
 //通过给定的概念ID找到对应的股票
-func GetConceptDetailInfosByIdFromMySQL(conceptID string) []*StockConceptDetail  {
-	ret:=make([]*StockConceptDetail,0)
+func GetConceptDetailInfosByIdFromMySQL(conceptID string) []*StockConceptDetail {
+	ret := make([]*StockConceptDetail, 0)
 
-	sql:=fmt.Sprintf("SELECT * FROM stock_concept_detail WHERE concept_code=\"%s\" ;",conceptID)
+	sql := fmt.Sprintf("SELECT * FROM stock_concept_detail WHERE concept_code=\"%s\" ;", conceptID)
 
-	sqlRes,err:=Engine.QueryString(sql)
+	sqlRes, err := Engine.QueryString(sql)
 	if err != nil {
-		panic(fmt.Sprintf("GetConceptInfosFromMySQL ERROR %v",err))
+		panic(fmt.Sprintf("GetConceptInfosFromMySQL ERROR %v", err))
 	}
 
-	for _,v:=range sqlRes{
-		temp:=&StockConceptDetail{}
-		commons.DataToStruct(v,temp)
-		ret = append(ret,temp)
+	for _, v := range sqlRes {
+		temp := &StockConceptDetail{}
+		commons.DataToStruct(v, temp)
+		ret = append(ret, temp)
+	}
+
+	return ret
+}
+
+//获取 财务指标数据
+func GetFinaIndicatorFromMySQL(code string, start_data, end_data string) []*StockFinaIndicator {
+	ret := make([]*StockFinaIndicator, 0)
+
+	sql := fmt.Sprintf("SELECT * FROM stock_fina_indicator WHERE ts_code=\"%s\"  ORDER BY end_date DESC ;", code)
+
+	sqlRes, err := Engine.QueryString(sql)
+
+	if err != nil {
+		//panic(fmt.Sprintf("GetFinaIndicatorFromMySQL ERROR %v", err))
+		return  nil
+	}
+
+	for _, v := range sqlRes {
+		temp := &StockFinaIndicator{}
+		commons.DataToStruct(v, temp)
+		ret = append(ret, temp)
 	}
 
 	return ret
