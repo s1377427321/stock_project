@@ -1,0 +1,19 @@
+server:
+  port: 50001
+  runmode: debug #debug true
+  publickey: ./conf/public.pem
+  privatekey: ./conf/private.pem
+rpc:
+  port: 50002
+  testaddress: 172.0.0.1:50102
+database:
+  url: 120.79.154.53
+  port: 3306
+  rurl: 120.79.154.53
+  rport: 3306
+redis:
+  first:
+    addr: 120.79.154.53:6989
+    passwd: 123456
+    index: 1
+    exptime: 604800

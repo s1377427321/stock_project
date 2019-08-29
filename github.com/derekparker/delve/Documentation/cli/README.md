@@ -5,6 +5,7 @@ Command | Description
 [args](#args) | Print function arguments.
 [break](#break) | Sets a breakpoint.
 [breakpoints](#breakpoints) | Print out info for active breakpoints.
+[call](#call) | Resumes process, injecting a function call (EXPERIMENTAL!!!)
 [check](#check) | Creates a checkpoint at the current position.
 [checkpoints](#checkpoints) | Print out info for existing checkpoints.
 [clear](#clear) | Deletes breakpoint.
@@ -13,8 +14,10 @@ Command | Description
 [condition](#condition) | Set breakpoint condition.
 [config](#config) | Changes configuration parameters.
 [continue](#continue) | Run until breakpoint or program termination.
+[deferred](#deferred) | Executes command in the context of a deferred call.
 [disassemble](#disassemble) | Disassembler.
 [down](#down) | Move the current frame down.
+[edit](#edit) | Open where you are in $DELVE_EDITOR or $EDITOR
 [exit](#exit) | Exit the debugger.
 [frame](#frame) | Set the current frame, or execute command on a different frame.
 [funcs](#funcs) | Print list of functions.
@@ -68,10 +71,31 @@ Print out info for active breakpoints.
 
 Aliases: bp
 
+## call
+Resumes process, injecting a function call (EXPERIMENTAL!!!)
+	
+	call [-unsafe] <function call expression>
+	
+Current limitations:
+- only pointers to stack-allocated objects can be passed as argument.
+- only some automatic type conversions are supported.
+- functions can only be called on running goroutines that are not
+  executing the runtime.
+- the current goroutine needs to have at least 256 bytes of free space on
+  the stack.
+- functions can only be called when the goroutine is stopped at a safe
+  point.
+- calling a function will resume execution of all goroutines.
+- only supported on linux's native backend.
+
+
+
 ## check
 Creates a checkpoint at the current position.
 
-	checkpoint [where]
+	checkpoint [note]
+
+The "note" is arbitrary text that can be used to identify the checkpoint, if it is not specified it defaults to the current filename:line position.
 
 Aliases: checkpoint
 
@@ -140,6 +164,14 @@ Run until breakpoint or program termination.
 
 Aliases: c
 
+## deferred
+Executes command in the context of a deferred call.
+
+	deferred <n> <command>
+
+Executes the specified command (print, args, locals) in the context of the n-th deferred call in the current frame.
+
+
 ## disassemble
 Disassembler.
 
@@ -155,22 +187,35 @@ Aliases: disass
 ## down
 Move the current frame down.
 
-  down [<m>]
-  down [<m>] <command>
+	down [<m>]
+	down [<m>] <command>
 
 Move the current frame down by <m>. The second form runs the command on the given frame.
 
 
+## edit
+Open where you are in $DELVE_EDITOR or $EDITOR
+
+	edit [locspec]
+	
+If locspec is omitted edit will open the current source file in the editor, otherwise it will open the specified location.
+
+Aliases: ed
+
 ## exit
 Exit the debugger.
+		
+	exit [-c]
+	
+When connected to a headless instance started with the --accept-multiclient, pass -c to resume the execution of the target process before disconnecting.
 
 Aliases: quit q
 
 ## frame
 Set the current frame, or execute command on a different frame.
 
-  frame <m>
-  frame <m> <command>
+	frame <m>
+	frame <m> <command>
 
 The first form sets frame used by subsequent commands such as "print" or "set".
 The second form runs the command on the given frame.
@@ -199,13 +244,15 @@ Called with more arguments it will execute a command on the specified goroutine.
 ## goroutines
 List program goroutines.
 
-	goroutines [-u (default: user location)|-r (runtime location)|-g (go statement location)]
+	goroutines [-u (default: user location)|-r (runtime location)|-g (go statement location)|-s (start location)] [ -t (stack trace)]
 
 Print out info for every goroutine. The flag controls what information is shown along with each goroutine:
 
 	-u	displays location of topmost stackframe in user code
 	-r	displays location of topmost stackframe (including frames inside private runtime functions)
 	-g	displays location of go instruction that created the goroutine
+	-s	displays location of the start function
+	-t	displays stack trace of goroutine
 
 If no flag is specified the default is -u.
 
@@ -305,10 +352,11 @@ If regex is specified only the source files matching it will be returned.
 ## stack
 Print stack trace.
 
-	[goroutine <n>] [frame <m>] stack [<depth>] [-full] [-g] [-s] [-offsets]
+	[goroutine <n>] [frame <m>] stack [<depth>] [-full] [-offsets] [-defer]
 
 	-full		every stackframe is decorated with the value of its local variables and arguments.
-	-offsets	prints frame offset of each frame
+	-offsets	prints frame offset of each frame.
+	-defer		prints deferred function call stack for each frame.
 
 
 Aliases: bt
@@ -360,8 +408,8 @@ If regex is specified only the types matching it will be returned.
 ## up
 Move the current frame up.
 
-  up [<m>]
-  up [<m>] <command>
+	up [<m>]
+	up [<m>] <command>
 
 Move the current frame up by <m>. The second form runs the command on the given frame.
 
@@ -377,6 +425,6 @@ If regex is specified only package variables with a name matching it will be ret
 ## whatis
 Prints type of an expression.
 
-		whatis <expression>.
+	whatis <expression>
 
 

@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -15,8 +16,8 @@ import (
 // Record uses rr to record the execution of the specified program and
 // returns the trace directory's path.
 func Record(cmd []string, wd string, quiet bool) (tracedir string, err error) {
-	if _, err := exec.LookPath("rr"); err != nil {
-		return "", &ErrBackendUnavailable{}
+	if err := checkRRAvailabe(); err != nil {
+		return "", err
 	}
 
 	rfd, wfd, err := os.Pipe()
@@ -52,9 +53,9 @@ func Record(cmd []string, wd string, quiet bool) (tracedir string, err error) {
 
 // Replay starts an instance of rr in replay mode, with the specified trace
 // directory, and connects to it.
-func Replay(tracedir string, quiet bool) (*Process, error) {
-	if _, err := exec.LookPath("rr"); err != nil {
-		return nil, &ErrBackendUnavailable{}
+func Replay(tracedir string, quiet bool, debugInfoDirs []string) (*Process, error) {
+	if err := checkRRAvailabe(); err != nil {
+		return nil, err
 	}
 
 	rrcmd := exec.Command("rr", "replay", "--dbgport=0", tracedir)
@@ -63,7 +64,7 @@ func Replay(tracedir string, quiet bool) (*Process, error) {
 	if err != nil {
 		return nil, err
 	}
-	rrcmd.SysProcAttr = backgroundSysProcAttr()
+	rrcmd.SysProcAttr = sysProcAttr(false)
 
 	initch := make(chan rrInit)
 	go rrStderrParser(stderr, initch, quiet)
@@ -81,13 +82,40 @@ func Replay(tracedir string, quiet bool) (*Process, error) {
 
 	p := New(rrcmd.Process)
 	p.tracedir = tracedir
-	err = p.Dial(init.port, init.exe, 0)
+	err = p.Dial(init.port, init.exe, 0, debugInfoDirs)
 	if err != nil {
 		rrcmd.Process.Kill()
 		return nil, err
 	}
 
 	return p, nil
+}
+
+// ErrPerfEventParanoid is the error returned by Reply and Record if
+// /proc/sys/kernel/perf_event_paranoid is greater than 1.
+type ErrPerfEventParanoid struct {
+	actual int
+}
+
+func (err ErrPerfEventParanoid) Error() string {
+	return fmt.Sprintf("rr needs /proc/sys/kernel/perf_event_paranoid <= 1, but it is %d", err.actual)
+}
+
+func checkRRAvailabe() error {
+	if _, err := exec.LookPath("rr"); err != nil {
+		return &ErrBackendUnavailable{}
+	}
+
+	// Check that /proc/sys/kernel/perf_event_paranoid doesn't exist or is <= 1.
+	buf, err := ioutil.ReadFile("/proc/sys/kernel/perf_event_paranoid")
+	if err == nil {
+		perfEventParanoid, _ := strconv.Atoi(strings.TrimSpace(string(buf)))
+		if perfEventParanoid > 1 {
+			return ErrPerfEventParanoid{perfEventParanoid}
+		}
+	}
+
+	return nil
 }
 
 type rrInit struct {
@@ -229,11 +257,11 @@ func splitQuotedFields(in string) []string {
 }
 
 // RecordAndReplay acts like calling Record and then Replay.
-func RecordAndReplay(cmd []string, wd string, quiet bool) (p *Process, tracedir string, err error) {
+func RecordAndReplay(cmd []string, wd string, quiet bool, debugInfoDirs []string) (p *Process, tracedir string, err error) {
 	tracedir, err = Record(cmd, wd, quiet)
 	if tracedir == "" {
 		return nil, "", err
 	}
-	p, err = Replay(tracedir, quiet)
+	p, err = Replay(tracedir, quiet, debugInfoDirs)
 	return p, tracedir, err
 }

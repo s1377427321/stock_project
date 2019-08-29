@@ -34,7 +34,7 @@ func CreateBeegoLog(fileName string) {
 	}
 	dir = strings.Replace(dir, "\\", "/", -1)
 
-	filePath := dir
+	filePath := dir+"/logs"
 
 	SetLogOption(filePath, fileName, 6, true)
 }

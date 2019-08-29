@@ -18,6 +18,7 @@ import (
 
 	"github.com/derekparker/delve/pkg/logflags"
 	"github.com/derekparker/delve/pkg/proc"
+	"github.com/sirupsen/logrus"
 )
 
 type gdbConn struct {
@@ -43,12 +44,15 @@ type gdbConn struct {
 	maxTransmitAttempts   int  // maximum number of transmit or receive attempts when bad checksums are read
 	threadSuffixSupported bool // thread suffix supported by stub
 	isDebugserver         bool // true if the stub is debugserver
+
+	log *logrus.Entry
 }
 
 const (
 	regnamePC     = "rip"
 	regnameCX     = "rcx"
 	regnameSP     = "rsp"
+	regnameDX     = "rdx"
 	regnameBP     = "rbp"
 	regnameFsBase = "fs_base"
 	regnameGsBase = "gs_base"
@@ -353,7 +357,7 @@ func (conn *gdbConn) readRegisterInfo() (err error) {
 }
 
 func (conn *gdbConn) readAnnex(annex string) ([]gdbRegisterInfo, error) {
-	tgtbuf, err := conn.qXfer("features", annex)
+	tgtbuf, err := conn.qXfer("features", annex, false)
 	if err != nil {
 		return nil, err
 	}
@@ -373,19 +377,28 @@ func (conn *gdbConn) readAnnex(annex string) ([]gdbRegisterInfo, error) {
 }
 
 func (conn *gdbConn) readExecFile() (string, error) {
-	outbuf, err := conn.qXfer("exec-file", "")
+	outbuf, err := conn.qXfer("exec-file", "", true)
 	if err != nil {
 		return "", err
 	}
 	return string(outbuf), nil
 }
 
+func (conn *gdbConn) readAuxv() ([]byte, error) {
+	return conn.qXfer("auxv", "", true)
+}
+
 // qXfer executes a 'qXfer' read with the specified kind (i.e. feature,
 // exec-file, etc...) and annex.
-func (conn *gdbConn) qXfer(kind, annex string) ([]byte, error) {
+func (conn *gdbConn) qXfer(kind, annex string, binary bool) ([]byte, error) {
 	out := []byte{}
 	for {
-		buf, err := conn.exec([]byte(fmt.Sprintf("$qXfer:%s:read:%s:%x,fff", kind, annex, len(out))), "target features transfer")
+		cmd := []byte(fmt.Sprintf("$qXfer:%s:read:%s:%x,fff", kind, annex, len(out)))
+		err := conn.send(cmd)
+		if err != nil {
+			return nil, err
+		}
+		buf, err := conn.recv(cmd, "target features transfer", binary)
 		if err != nil {
 			return nil, err
 		}
@@ -422,7 +435,7 @@ func (conn *gdbConn) kill() error {
 		// kill. This is not an error.
 		conn.conn.Close()
 		conn.conn = nil
-		return proc.ProcessExitedError{Pid: conn.pid}
+		return proc.ErrProcessExited{Pid: conn.pid}
 	}
 	if err != nil {
 		return err
@@ -634,7 +647,7 @@ func (conn *gdbConn) parseStopPacket(resp []byte, threadID string, tu *threadUpd
 		sp.sig = uint8(sig)
 
 		if logflags.GdbWire() && gdbWireFullStopPacket {
-			fmt.Fprintf(os.Stderr, "full stop packet: %s\n", string(resp))
+			conn.log.Debugf("full stop packet: %s", string(resp))
 		}
 
 		buf := resp[3:]
@@ -680,7 +693,7 @@ func (conn *gdbConn) parseStopPacket(resp []byte, threadID string, tu *threadUpd
 			semicolon = len(resp)
 		}
 		status, _ := strconv.ParseUint(string(resp[1:semicolon]), 16, 8)
-		return false, stopPacket{}, proc.ProcessExitedError{Pid: conn.pid, Status: int(status)}
+		return false, stopPacket{}, proc.ErrProcessExited{Pid: conn.pid, Status: int(status)}
 
 	case 'N':
 		// we were singlestepping the thread and the thread exited
@@ -705,9 +718,7 @@ const ctrlC = 0x03 // the ASCII character for ^C
 
 // executes a ctrl-C on the line
 func (conn *gdbConn) sendCtrlC() error {
-	if logflags.GdbWire() {
-		fmt.Println("<- interrupt")
-	}
+	conn.log.Debug("<- interrupt")
 	_, err := conn.conn.Write([]byte{ctrlC})
 	return err
 }
@@ -864,6 +875,10 @@ func writeAsciiBytes(w io.Writer, data []byte) {
 
 // executes 'M' (write memory) command
 func (conn *gdbConn) writeMemory(addr uintptr, data []byte) (written int, err error) {
+	if len(data) == 0 {
+		// LLDB can't parse requests for 0-length writes and hangs if we emit them
+		return 0, nil
+	}
 	conn.outbuf.Reset()
 	//TODO(aarzilli): do not send packets larger than conn.PacketSize
 	fmt.Fprintf(&conn.outbuf, "$M%x,%x:", addr, len(data))
@@ -994,9 +1009,9 @@ func (conn *gdbConn) send(cmd []byte) error {
 	for {
 		if logflags.GdbWire() {
 			if len(cmd) > gdbWireMaxLen {
-				fmt.Printf("<- %s...\n", string(cmd[:gdbWireMaxLen]))
+				conn.log.Debugf("<- %s...", string(cmd[:gdbWireMaxLen]))
 			} else {
-				fmt.Printf("<- %s\n", string(cmd))
+				conn.log.Debugf("<- %s", string(cmd))
 			}
 		}
 		_, err := conn.conn.Write(cmd)
@@ -1045,9 +1060,9 @@ func (conn *gdbConn) recv(cmd []byte, context string, binary bool) (resp []byte,
 				partial = true
 			}
 			if !partial {
-				fmt.Printf("-> %s%s\n", string(resp), string(conn.inbuf[:2]))
+				conn.log.Debugf("-> %s%s", string(resp), string(conn.inbuf[:2]))
 			} else {
-				fmt.Printf("-> %s...\n", string(out))
+				conn.log.Debugf("-> %s...", string(out))
 			}
 		}
 
@@ -1098,9 +1113,7 @@ func (conn *gdbConn) readack() bool {
 	if err != nil {
 		return false
 	}
-	if logflags.GdbWire() {
-		fmt.Printf("-> %s\n", string(b))
-	}
+	conn.log.Debugf("-> %s", string(b))
 	return b == '+'
 }
 
@@ -1110,9 +1123,7 @@ func (conn *gdbConn) sendack(c byte) {
 		panic(fmt.Errorf("sendack(%c)", c))
 	}
 	conn.conn.Write([]byte{c})
-	if logflags.GdbWire() {
-		fmt.Printf("<- %s\n", string(c))
-	}
+	conn.log.Debugf("<- %s", string(c))
 }
 
 // escapeXor is the value mandated by the specification to escape characters

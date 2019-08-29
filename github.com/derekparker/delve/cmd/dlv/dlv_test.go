@@ -43,50 +43,46 @@ func assertNoError(err error, t testing.TB, s string) {
 	}
 }
 
-func goPath(name string) string {
-	if val := os.Getenv(name); val != "" {
-		// Use first GOPATH entry if there are multiple.
-		return filepath.SplitList(val)[0]
+func projectRoot() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		panic(err)
 	}
-
-	val, err := exec.Command("go", "env", name).Output()
+	if strings.Contains(wd, os.Getenv("GOPATH")) {
+		return filepath.Join(os.Getenv("GOPATH"), "src", "github.com", "derekparker", "delve")
+	}
+	val, err := exec.Command("go", "list", "-m", "-f", "{{ .Dir }}").Output()
 	if err != nil {
 		panic(err) // the Go tool was tested to work earlier
 	}
-	return filepath.SplitList(strings.TrimSpace(string(val)))[0]
+	return strings.TrimSuffix(string(val), "\n")
 }
 
 func TestBuild(t *testing.T) {
 	const listenAddr = "localhost:40573"
 	var err error
-	makedir := filepath.Join(goPath("GOPATH"), "src", "github.com", "derekparker", "delve")
-	for _, makeProgram := range []string{"make", "mingw32-make"} {
-		var out []byte
-		cmd := exec.Command(makeProgram, "build")
-		cmd.Dir = makedir
-		out, err = cmd.CombinedOutput()
-		if err == nil {
-			break
-		} else {
-			t.Logf("makefile error %s (%s): %v", makeProgram, makedir, err)
-			t.Logf("output %s", string(out))
-		}
+
+	cmd := exec.Command("go", "run", "scripts/make.go", "build")
+	cmd.Dir = projectRoot()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("makefile error: %v\noutput %s\n", err, string(out))
 	}
-	assertNoError(err, t, "make")
-	dlvbin := filepath.Join(makedir, "dlv")
+
+	dlvbin := filepath.Join(cmd.Dir, "dlv")
 	defer os.Remove(dlvbin)
 
 	fixtures := protest.FindFixturesDir()
 
 	buildtestdir := filepath.Join(fixtures, "buildtest")
 
-	cmd := exec.Command(dlvbin, "debug", "--headless=true", "--listen="+listenAddr, "--api-version=2", "--backend="+testBackend)
+	cmd = exec.Command(dlvbin, "debug", "--headless=true", "--listen="+listenAddr, "--api-version=2", "--backend="+testBackend, "--log", "--log-output=debugger,rpc")
 	cmd.Dir = buildtestdir
-	stdout, err := cmd.StdoutPipe()
-	assertNoError(err, t, "stdout pipe")
+	stderr, err := cmd.StderrPipe()
+	assertNoError(err, t, "stderr pipe")
 	cmd.Start()
 
-	scan := bufio.NewScanner(stdout)
+	scan := bufio.NewScanner(stderr)
 	// wait for the debugger to start
 	scan.Scan()
 	go func() {
@@ -207,10 +203,10 @@ func TestOutput(t *testing.T) {
 }
 
 func checkAutogenDoc(t *testing.T, filename, gencommand string, generated []byte) {
-	saved := slurpFile(t, os.ExpandEnv(fmt.Sprintf("$GOPATH/src/github.com/derekparker/delve/%s", filename)))
+	saved := slurpFile(t, filepath.Join(projectRoot(), filename))
 
 	if len(saved) != len(generated) {
-		t.Fatalf("%s: needs to be regenerated run scripts/gen-cli-docs.go", filename)
+		t.Fatalf("%s: needs to be regenerated; run %s", filename, gencommand)
 	}
 
 	for i := range saved {

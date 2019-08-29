@@ -21,6 +21,12 @@ import (
 )
 
 func withTestClient1(name string, t *testing.T, fn func(c *rpc1.RPCClient)) {
+	withTestClient1Extended(name, t, func(c *rpc1.RPCClient, fixture protest.Fixture) {
+		fn(c)
+	})
+}
+
+func withTestClient1Extended(name string, t *testing.T, fn func(c *rpc1.RPCClient, fixture protest.Fixture)) {
 	if testBackend == "rr" {
 		protest.MustHaveRecordingAllowed(t)
 	}
@@ -29,11 +35,16 @@ func withTestClient1(name string, t *testing.T, fn func(c *rpc1.RPCClient)) {
 		t.Fatalf("couldn't start listener: %s\n", err)
 	}
 	defer listener.Close()
+	var buildFlags protest.BuildFlags
+	if buildMode == "pie" {
+		buildFlags = protest.BuildModePIE
+	}
+	fixture := protest.BuildFixture(name, buildFlags)
 	server := rpccommon.NewServer(&service.Config{
 		Listener:    listener,
-		ProcessArgs: []string{protest.BuildFixture(name, 0).Path},
+		ProcessArgs: []string{fixture.Path},
 		Backend:     testBackend,
-	}, false)
+	})
 	if err := server.Run(); err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +53,7 @@ func withTestClient1(name string, t *testing.T, fn func(c *rpc1.RPCClient)) {
 		client.Detach(true)
 	}()
 
-	fn(client)
+	fn(client, fixture)
 }
 
 func Test1RunWithInvalidPath(t *testing.T) {
@@ -61,7 +72,7 @@ func Test1RunWithInvalidPath(t *testing.T) {
 		Listener:    listener,
 		ProcessArgs: []string{"invalid_path"},
 		Backend:     testBackend,
-	}, false)
+	})
 	if err := server.Run(); err == nil {
 		t.Fatal("Expected Run to return error for invalid program path")
 	}
@@ -150,7 +161,7 @@ func Test1Restart_attachPid(t *testing.T) {
 		Listener:  nil,
 		AttachPid: 999,
 		Backend:   testBackend,
-	}, false)
+	})
 	if err := server.Restart(); err == nil {
 		t.Fatal("expected error on restart after attaching to pid but got none")
 	}
@@ -197,7 +208,7 @@ func Test1ClientServer_step(t *testing.T) {
 		}
 
 		if before, after := stateBefore.CurrentThread.PC, stateAfter.CurrentThread.PC; before >= after {
-			t.Errorf("Expected %#v to be greater than %#v", before, after)
+			t.Fatalf("Expected %#v to be greater than %#v", after, before)
 		}
 	})
 }
@@ -422,7 +433,7 @@ func Test1ClientServer_infoLocals(t *testing.T) {
 		if state.Err != nil {
 			t.Fatalf("Unexpected error: %v, state: %#v", state.Err, state)
 		}
-		locals, err := c.ListLocalVariables(api.EvalScope{-1, 0})
+		locals, err := c.ListLocalVariables(api.EvalScope{-1, 0, 0})
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -450,7 +461,7 @@ func Test1ClientServer_infoArgs(t *testing.T) {
 		if regs == "" {
 			t.Fatal("Expected string showing registers values, got empty string")
 		}
-		locals, err := c.ListFunctionArgs(api.EvalScope{-1, 0})
+		locals, err := c.ListFunctionArgs(api.EvalScope{-1, 0, 0})
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -618,25 +629,24 @@ func Test1ClientServer_FindLocations(t *testing.T) {
 		findLocationHelper(t, c, "main.stacktraceme", false, 1, stacktracemeAddr)
 	})
 
-	withTestClient1("locationsUpperCase", t, func(c *rpc1.RPCClient) {
+	withTestClient1Extended("locationsUpperCase", t, func(c *rpc1.RPCClient, fixture protest.Fixture) {
 		// Upper case
 		findLocationHelper(t, c, "locationsUpperCase.go:6", false, 1, 0)
 
 		// Fully qualified path
-		path := protest.Fixtures[protest.FixtureKey{"locationsUpperCase", 0}].Source
-		findLocationHelper(t, c, path+":6", false, 1, 0)
-		bp, err := c.CreateBreakpoint(&api.Breakpoint{File: path, Line: 6})
+		findLocationHelper(t, c, fixture.Source+":6", false, 1, 0)
+		bp, err := c.CreateBreakpoint(&api.Breakpoint{File: fixture.Source, Line: 6})
 		if err != nil {
-			t.Fatalf("Could not set breakpoint in %s: %v\n", path, err)
+			t.Fatalf("Could not set breakpoint in %s: %v\n", fixture.Source, err)
 		}
 		c.ClearBreakpoint(bp.ID)
 
 		//  Allow `/` or `\` on Windows
 		if runtime.GOOS == "windows" {
-			findLocationHelper(t, c, filepath.FromSlash(path)+":6", false, 1, 0)
-			bp, err = c.CreateBreakpoint(&api.Breakpoint{File: filepath.FromSlash(path), Line: 6})
+			findLocationHelper(t, c, filepath.FromSlash(fixture.Source)+":6", false, 1, 0)
+			bp, err = c.CreateBreakpoint(&api.Breakpoint{File: filepath.FromSlash(fixture.Source), Line: 6})
 			if err != nil {
-				t.Fatalf("Could not set breakpoint in %s: %v\n", filepath.FromSlash(path), err)
+				t.Fatalf("Could not set breakpoint in %s: %v\n", filepath.FromSlash(fixture.Source), err)
 			}
 			c.ClearBreakpoint(bp.ID)
 		}
@@ -648,10 +658,10 @@ func Test1ClientServer_FindLocations(t *testing.T) {
 			shouldWrongCaseBeError = false
 			numExpectedMatches = 1
 		}
-		findLocationHelper(t, c, strings.ToLower(path)+":6", shouldWrongCaseBeError, numExpectedMatches, 0)
-		bp, err = c.CreateBreakpoint(&api.Breakpoint{File: strings.ToLower(path), Line: 6})
+		findLocationHelper(t, c, strings.ToLower(fixture.Source)+":6", shouldWrongCaseBeError, numExpectedMatches, 0)
+		bp, err = c.CreateBreakpoint(&api.Breakpoint{File: strings.ToLower(fixture.Source), Line: 6})
 		if (err == nil) == shouldWrongCaseBeError {
-			t.Fatalf("Could not set breakpoint in %s: %v\n", strings.ToLower(path), err)
+			t.Fatalf("Could not set breakpoint in %s: %v\n", strings.ToLower(fixture.Source), err)
 		}
 		c.ClearBreakpoint(bp.ID)
 	})
@@ -677,7 +687,7 @@ func Test1ClientServer_EvalVariable(t *testing.T) {
 			t.Fatalf("Continue(): %v\n", state.Err)
 		}
 
-		var1, err := c.EvalVariable(api.EvalScope{-1, 0}, "a1")
+		var1, err := c.EvalVariable(api.EvalScope{-1, 0, 0}, "a1")
 		assertNoError(err, t, "EvalVariable")
 
 		t.Logf("var1: %s", var1.SinglelineString())
@@ -696,9 +706,9 @@ func Test1ClientServer_SetVariable(t *testing.T) {
 			t.Fatalf("Continue(): %v\n", state.Err)
 		}
 
-		assertNoError(c.SetVariable(api.EvalScope{-1, 0}, "a2", "8"), t, "SetVariable()")
+		assertNoError(c.SetVariable(api.EvalScope{-1, 0, 0}, "a2", "8"), t, "SetVariable()")
 
-		a2, err := c.EvalVariable(api.EvalScope{-1, 0}, "a2")
+		a2, err := c.EvalVariable(api.EvalScope{-1, 0, 0}, "a2")
 		if err != nil {
 			t.Fatalf("Could not evaluate variable: %v", err)
 		}
@@ -732,7 +742,7 @@ func Test1ClientServer_FullStacktrace(t *testing.T) {
 				if frame.Function == nil {
 					continue
 				}
-				if frame.Function.Name != "main.agoroutine" {
+				if frame.Function.Name() != "main.agoroutine" {
 					continue
 				}
 				t.Logf("frame %d: %v", i, frame)
@@ -825,10 +835,10 @@ func Test1Issue355(t *testing.T) {
 		assertError(err, t, "ListThreads()")
 		_, err = c.GetThread(tid)
 		assertError(err, t, "GetThread()")
-		assertError(c.SetVariable(api.EvalScope{gid, 0}, "a", "10"), t, "SetVariable()")
-		_, err = c.ListLocalVariables(api.EvalScope{gid, 0})
+		assertError(c.SetVariable(api.EvalScope{gid, 0, 0}, "a", "10"), t, "SetVariable()")
+		_, err = c.ListLocalVariables(api.EvalScope{gid, 0, 0})
 		assertError(err, t, "ListLocalVariables()")
-		_, err = c.ListFunctionArgs(api.EvalScope{gid, 0})
+		_, err = c.ListFunctionArgs(api.EvalScope{gid, 0, 0})
 		assertError(err, t, "ListFunctionArgs()")
 		_, err = c.ListRegisters()
 		assertError(err, t, "ListRegisters()")
@@ -836,9 +846,9 @@ func Test1Issue355(t *testing.T) {
 		assertError(err, t, "ListGoroutines()")
 		_, err = c.Stacktrace(gid, 10, false)
 		assertError(err, t, "Stacktrace()")
-		_, err = c.FindLocation(api.EvalScope{gid, 0}, "+1")
+		_, err = c.FindLocation(api.EvalScope{gid, 0, 0}, "+1")
 		assertError(err, t, "FindLocation()")
-		_, err = c.DisassemblePC(api.EvalScope{-1, 0}, 0x40100, api.IntelFlavour)
+		_, err = c.DisassemblePC(api.EvalScope{-1, 0, 0}, 0x40100, api.IntelFlavour)
 		assertError(err, t, "DisassemblePC()")
 	})
 }
@@ -853,12 +863,12 @@ func Test1Disasm(t *testing.T) {
 		state := <-ch
 		assertNoError(state.Err, t, "Continue()")
 
-		locs, err := c.FindLocation(api.EvalScope{-1, 0}, "main.main")
+		locs, err := c.FindLocation(api.EvalScope{-1, 0, 0}, "main.main")
 		assertNoError(err, t, "FindLocation()")
 		if len(locs) != 1 {
 			t.Fatalf("wrong number of locations for main.main: %d", len(locs))
 		}
-		d1, err := c.DisassemblePC(api.EvalScope{-1, 0}, locs[0].PC, api.IntelFlavour)
+		d1, err := c.DisassemblePC(api.EvalScope{-1, 0, 0}, locs[0].PC, api.IntelFlavour)
 		assertNoError(err, t, "DisassemblePC()")
 		if len(d1) < 2 {
 			t.Fatalf("wrong size of disassembly: %d", len(d1))
@@ -866,7 +876,7 @@ func Test1Disasm(t *testing.T) {
 
 		pcstart := d1[0].Loc.PC
 		pcend := d1[len(d1)-1].Loc.PC + uint64(len(d1[len(d1)-1].Bytes))
-		d2, err := c.DisassembleRange(api.EvalScope{-1, 0}, pcstart, pcend, api.IntelFlavour)
+		d2, err := c.DisassembleRange(api.EvalScope{-1, 0, 0}, pcstart, pcend, api.IntelFlavour)
 		assertNoError(err, t, "DisassembleRange()")
 
 		if len(d1) != len(d2) {
@@ -875,7 +885,7 @@ func Test1Disasm(t *testing.T) {
 			t.Fatal("mismatched length between disassemble pc and disassemble range")
 		}
 
-		d3, err := c.DisassemblePC(api.EvalScope{-1, 0}, state.CurrentThread.PC, api.IntelFlavour)
+		d3, err := c.DisassemblePC(api.EvalScope{-1, 0, 0}, state.CurrentThread.PC, api.IntelFlavour)
 		assertNoError(err, t, "DisassemblePC() - second call")
 
 		if len(d1) != len(d3) {
@@ -887,7 +897,7 @@ func Test1Disasm(t *testing.T) {
 		// look for static call to afunction() on line 29
 		found := false
 		for i := range d3 {
-			if d3[i].Loc.Line == 29 && strings.HasPrefix(d3[i].Text, "call") && d3[i].DestLoc != nil && d3[i].DestLoc.Function != nil && d3[i].DestLoc.Function.Name == "main.afunction" {
+			if d3[i].Loc.Line == 29 && strings.HasPrefix(d3[i].Text, "call") && d3[i].DestLoc != nil && d3[i].DestLoc.Function != nil && d3[i].DestLoc.Function.Name() == "main.afunction" {
 				found = true
 				break
 			}
@@ -919,7 +929,7 @@ func Test1Disasm(t *testing.T) {
 			state, err := c.StepInstruction()
 			assertNoError(err, t, fmt.Sprintf("StepInstruction() %d", count))
 
-			d3, err = c.DisassemblePC(api.EvalScope{-1, 0}, state.CurrentThread.PC, api.IntelFlavour)
+			d3, err = c.DisassemblePC(api.EvalScope{-1, 0, 0}, state.CurrentThread.PC, api.IntelFlavour)
 			assertNoError(err, t, fmt.Sprintf("StepInstruction() %d", count))
 
 			curinstr := getCurinstr(d3)
@@ -937,7 +947,7 @@ func Test1Disasm(t *testing.T) {
 				if curinstr.DestLoc == nil || curinstr.DestLoc.Function == nil {
 					t.Fatalf("Call instruction does not have destination: %v", curinstr)
 				}
-				if curinstr.DestLoc.Function.Name != "main.afunction" {
+				if curinstr.DestLoc.Function.Name() != "main.afunction" {
 					t.Fatalf("Call instruction destination not main.afunction: %v", curinstr)
 				}
 				break
@@ -982,7 +992,7 @@ func Test1ClientServer_CondBreakpoint(t *testing.T) {
 		state := <-c.Continue()
 		assertNoError(state.Err, t, "Continue()")
 
-		nvar, err := c.EvalVariable(api.EvalScope{-1, 0}, "n")
+		nvar, err := c.EvalVariable(api.EvalScope{-1, 0, 0}, "n")
 		assertNoError(err, t, "EvalVariable()")
 
 		if nvar.SinglelineString() != "7" {
@@ -1086,14 +1096,14 @@ func Test1TypesCommand(t *testing.T) {
 
 func Test1Issue406(t *testing.T) {
 	withTestClient1("issue406", t, func(c *rpc1.RPCClient) {
-		locs, err := c.FindLocation(api.EvalScope{-1, 0}, "issue406.go:146")
+		locs, err := c.FindLocation(api.EvalScope{-1, 0, 0}, "issue406.go:146")
 		assertNoError(err, t, "FindLocation()")
 		_, err = c.CreateBreakpoint(&api.Breakpoint{Addr: locs[0].PC})
 		assertNoError(err, t, "CreateBreakpoint()")
 		ch := c.Continue()
 		state := <-ch
 		assertNoError(state.Err, t, "Continue()")
-		v, err := c.EvalVariable(api.EvalScope{-1, 0}, "cfgtree")
+		v, err := c.EvalVariable(api.EvalScope{-1, 0, 0}, "cfgtree")
 		assertNoError(err, t, "EvalVariable()")
 		vs := v.MultilineString("")
 		t.Logf("cfgtree formats to: %s\n", vs)

@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/dgrijalva/jwt-go"
-	"github.com/labstack/echo"
+	"github.com/labstack/echo/v4"
 )
 
 type (
@@ -16,9 +16,23 @@ type (
 		// Skipper defines a function to skip middleware.
 		Skipper Skipper
 
-		// Signing key to validate token.
-		// Required.
+		// BeforeFunc defines a function which is executed just before the middleware.
+		BeforeFunc BeforeFunc
+
+		// SuccessHandler defines a function which is executed for a valid token.
+		SuccessHandler JWTSuccessHandler
+
+		// ErrorHandler defines a function which is executed for an invalid token.
+		// It may be used to define a custom JWT error.
+		ErrorHandler JWTErrorHandler
+
+		// Signing key to validate token. Used as fallback if SigningKeys has length 0.
+		// Required. This or SigningKeys.
 		SigningKey interface{}
+
+		// Map of signing keys to validate token with kid field usage.
+		// Required. This or SigningKey.
+		SigningKeys map[string]interface{}
 
 		// Signing method, used to check token signing method.
 		// Optional. Default value HS256.
@@ -48,6 +62,12 @@ type (
 		keyFunc jwt.Keyfunc
 	}
 
+	// JWTSuccessHandler defines a function which is executed for a valid token.
+	JWTSuccessHandler func(echo.Context)
+
+	// JWTErrorHandler defines a function which is executed for an invalid token.
+	JWTErrorHandler func(error) error
+
 	jwtExtractor func(echo.Context) (string, error)
 )
 
@@ -59,7 +79,6 @@ const (
 // Errors
 var (
 	ErrJWTMissing = echo.NewHTTPError(http.StatusBadRequest, "missing or malformed jwt")
-	ErrJWTInvalid = echo.NewHTTPError(http.StatusUnauthorized, "invalid or expired jwt")
 )
 
 var (
@@ -95,7 +114,7 @@ func JWTWithConfig(config JWTConfig) echo.MiddlewareFunc {
 	if config.Skipper == nil {
 		config.Skipper = DefaultJWTConfig.Skipper
 	}
-	if config.SigningKey == nil {
+	if config.SigningKey == nil && len(config.SigningKeys) == 0 {
 		panic("echo: jwt middleware requires signing key")
 	}
 	if config.SigningMethod == "" {
@@ -118,6 +137,15 @@ func JWTWithConfig(config JWTConfig) echo.MiddlewareFunc {
 		if t.Method.Alg() != config.SigningMethod {
 			return nil, fmt.Errorf("unexpected jwt signing method=%v", t.Header["alg"])
 		}
+		if len(config.SigningKeys) > 0 {
+			if kid, ok := t.Header["kid"].(string); ok {
+				if key, ok := config.SigningKeys[kid]; ok {
+					return key, nil
+				}
+			}
+			return nil, fmt.Errorf("unexpected jwt key id=%v", t.Header["kid"])
+		}
+
 		return config.SigningKey, nil
 	}
 
@@ -137,8 +165,15 @@ func JWTWithConfig(config JWTConfig) echo.MiddlewareFunc {
 				return next(c)
 			}
 
+			if config.BeforeFunc != nil {
+				config.BeforeFunc(c)
+			}
+
 			auth, err := extractor(c)
 			if err != nil {
+				if config.ErrorHandler != nil {
+					return config.ErrorHandler(err)
+				}
 				return err
 			}
 			token := new(jwt.Token)
@@ -153,11 +188,17 @@ func JWTWithConfig(config JWTConfig) echo.MiddlewareFunc {
 			if err == nil && token.Valid {
 				// Store user information from token into context.
 				c.Set(config.ContextKey, token)
+				if config.SuccessHandler != nil {
+					config.SuccessHandler(c)
+				}
 				return next(c)
 			}
+			if config.ErrorHandler != nil {
+				return config.ErrorHandler(err)
+			}
 			return &echo.HTTPError{
-				Code:     ErrJWTInvalid.Code,
-				Message:  ErrJWTInvalid.Message,
+				Code:     http.StatusUnauthorized,
+				Message:  "invalid or expired jwt",
 				Internal: err,
 			}
 		}

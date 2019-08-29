@@ -23,6 +23,7 @@ func ConvertBreakpoint(bp *proc.Breakpoint) *Breakpoint {
 		Line:          bp.Line,
 		Addr:          bp.Addr,
 		Tracepoint:    bp.Tracepoint,
+		TraceReturn:   bp.TraceReturn,
 		Stacktrace:    bp.Stacktrace,
 		Goroutine:     bp.Goroutine,
 		Variables:     bp.Variables,
@@ -123,6 +124,7 @@ func ConvertVar(v *proc.Variable) *Variable {
 		Base:     v.Base,
 
 		LocationExpr: v.LocationExpr,
+		DeclLine:     v.DeclLine,
 	}
 
 	r.Type = prettyTypeName(v.DwarfType)
@@ -214,7 +216,7 @@ func ConvertFunction(fn *proc.Function) *Function {
 	// those fields is not documented their value was replaced with 0 when
 	// gosym.Func was replaced by debug_info entries.
 	return &Function{
-		Name:      fn.Name,
+		Name_:     fn.Name,
 		Type:      0,
 		Value:     fn.Entry,
 		GoType:    0,
@@ -229,13 +231,18 @@ func ConvertGoroutine(g *proc.G) *Goroutine {
 	if th != nil {
 		tid = th.ThreadID()
 	}
-	return &Goroutine{
+	r := &Goroutine{
 		ID:             g.ID,
 		CurrentLoc:     ConvertLocation(g.CurrentLoc),
 		UserCurrentLoc: ConvertLocation(g.UserCurrent()),
 		GoStatementLoc: ConvertLocation(g.Go()),
+		StartLoc:       ConvertLocation(g.StartLoc()),
 		ThreadID:       tid,
 	}
+	if g.Unreadable != nil {
+		r.Unreadable = g.Unreadable.Error()
+	}
+	return r
 }
 
 // ConvertLocation converts from proc.Location to api.Location.
@@ -248,6 +255,7 @@ func ConvertLocation(loc proc.Location) Location {
 	}
 }
 
+// ConvertAsmInstruction converts from proc.AsmInstruction to api.AsmInstruction.
 func ConvertAsmInstruction(inst proc.AsmInstruction, text string) AsmInstruction {
 	var destloc *Location
 	if inst.DestLoc != nil {
@@ -264,6 +272,7 @@ func ConvertAsmInstruction(inst proc.AsmInstruction, text string) AsmInstruction
 	}
 }
 
+// LoadConfigToProc converts an api.LoadConfig to proc.LoadConfig.
 func LoadConfigToProc(cfg *LoadConfig) *proc.LoadConfig {
 	if cfg == nil {
 		return nil
@@ -274,9 +283,11 @@ func LoadConfigToProc(cfg *LoadConfig) *proc.LoadConfig {
 		cfg.MaxStringLen,
 		cfg.MaxArrayValues,
 		cfg.MaxStructFields,
+		0, // MaxMapBuckets is set internally by pkg/proc, read its documentation for an explanation.
 	}
 }
 
+// LoadConfigFromProc converts a proc.LoadConfig to api.LoadConfig.
 func LoadConfigFromProc(cfg *proc.LoadConfig) *LoadConfig {
 	if cfg == nil {
 		return nil
@@ -290,6 +301,7 @@ func LoadConfigFromProc(cfg *proc.LoadConfig) *LoadConfig {
 	}
 }
 
+// ConvertRegisters converts proc.Register to api.Register for a slice.
 func ConvertRegisters(in []proc.Register) (out []Register) {
 	out = make([]Register, len(in))
 	for i := range in {
@@ -298,6 +310,7 @@ func ConvertRegisters(in []proc.Register) (out []Register) {
 	return
 }
 
+// ConvertCheckpoint converts proc.Chekcpoint to api.Checkpoint.
 func ConvertCheckpoint(in proc.Checkpoint) (out Checkpoint) {
 	return Checkpoint(in)
 }

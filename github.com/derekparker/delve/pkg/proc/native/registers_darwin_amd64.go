@@ -1,9 +1,12 @@
+//+build darwin,macnative
+
 package native
 
 // #include "threads_darwin.h"
 import "C"
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"unsafe"
 
@@ -112,13 +115,21 @@ func (r *Regs) GAddr() (uint64, bool) {
 }
 
 // SetPC sets the RIP register to the value specified by `pc`.
-func (r *Regs) SetPC(t proc.Thread, pc uint64) error {
-	thread := t.(*Thread)
+func (thread *Thread) SetPC(pc uint64) error {
 	kret := C.set_pc(thread.os.threadAct, C.uint64_t(pc))
 	if kret != C.KERN_SUCCESS {
 		return fmt.Errorf("could not set pc")
 	}
 	return nil
+}
+
+// SetSP sets the RSP register to the value specified by `pc`.
+func (thread *Thread) SetSP(sp uint64) error {
+	return errors.New("not implemented")
+}
+
+func (thread *Thread) SetDX(dx uint64) error {
+	return errors.New("not implemented")
 }
 
 func (r *Regs) Get(n int) (uint64, error) {
@@ -275,7 +286,7 @@ func (r *Regs) Get(n int) (uint64, error) {
 		return r.r15, nil
 	}
 
-	return 0, proc.UnknownRegisterError
+	return 0, proc.ErrUnknownRegister
 }
 
 func registers(thread *Thread, floatingPoint bool) (proc.Registers, error) {
@@ -358,18 +369,7 @@ func registers(thread *Thread, floatingPoint bool) (proc.Registers, error) {
 	return regs, nil
 }
 
-func (thread *Thread) saveRegisters() (proc.Registers, error) {
-	kret := C.get_registers(C.mach_port_name_t(thread.os.threadAct), &thread.os.registers)
-	if kret != C.KERN_SUCCESS {
-		return nil, fmt.Errorf("could not save register contents")
-	}
-	return &Regs{rip: uint64(thread.os.registers.__rip), rsp: uint64(thread.os.registers.__rsp)}, nil
-}
-
-func (thread *Thread) restoreRegisters() error {
-	kret := C.set_registers(C.mach_port_name_t(thread.os.threadAct), &thread.os.registers)
-	if kret != C.KERN_SUCCESS {
-		return fmt.Errorf("could not save register contents")
-	}
+func (r *Regs) Copy() proc.Registers {
+	//TODO(aarzilli): implement this to support function calls
 	return nil
 }

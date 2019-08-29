@@ -1,16 +1,27 @@
 package gdbserial_test
 
 import (
+	"flag"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
 
+	"github.com/derekparker/delve/pkg/logflags"
 	"github.com/derekparker/delve/pkg/proc"
 	"github.com/derekparker/delve/pkg/proc/gdbserial"
 	protest "github.com/derekparker/delve/pkg/proc/test"
 )
+
+func TestMain(m *testing.M) {
+	var logConf string
+	flag.StringVar(&logConf, "log", "", "configures logging")
+	flag.Parse()
+	logflags.Setup(logConf != "", logConf)
+	os.Exit(protest.RunTestsWithFixtures(m))
+}
 
 func withTestRecording(name string, t testing.TB, fn func(p *gdbserial.Process, fixture protest.Fixture)) {
 	fixture := protest.BuildFixture(name, 0)
@@ -19,7 +30,7 @@ func withTestRecording(name string, t testing.TB, fn func(p *gdbserial.Process, 
 		t.Skip("test skipped, rr not found")
 	}
 	t.Log("recording")
-	p, tracedir, err := gdbserial.RecordAndReplay([]string{fixture.Path}, ".", true)
+	p, tracedir, err := gdbserial.RecordAndReplay([]string{fixture.Path}, ".", true, []string{})
 	if err != nil {
 		t.Fatal("Launch():", err)
 	}
@@ -59,7 +70,7 @@ func TestRestartAfterExit(t *testing.T) {
 		loc, err := p.CurrentThread().Location()
 		assertNoError(err, t, "CurrentThread().Location()")
 		err = proc.Continue(p)
-		if _, isexited := err.(proc.ProcessExitedError); err == nil || !isexited {
+		if _, isexited := err.(proc.ErrProcessExited); err == nil || !isexited {
 			t.Fatalf("program did not exit: %v", err)
 		}
 
@@ -72,7 +83,7 @@ func TestRestartAfterExit(t *testing.T) {
 			t.Fatalf("stopped at %d (expected %d)", loc2.Line, loc.Line)
 		}
 		err = proc.Continue(p)
-		if _, isexited := err.(proc.ProcessExitedError); err == nil || !isexited {
+		if _, isexited := err.(proc.ErrProcessExited); err == nil || !isexited {
 			t.Fatalf("program did not exit (after exit): %v", err)
 		}
 	})
@@ -95,7 +106,7 @@ func TestRestartDuringStop(t *testing.T) {
 			t.Fatalf("stopped at %d (expected %d)", loc2.Line, loc.Line)
 		}
 		err = proc.Continue(p)
-		if _, isexited := err.(proc.ProcessExitedError); err == nil || !isexited {
+		if _, isexited := err.(proc.ErrProcessExited); err == nil || !isexited {
 			t.Fatalf("program did not exit (after exit): %v", err)
 		}
 	})
@@ -244,5 +255,18 @@ func TestCheckpoints(t *testing.T) {
 		if len(checkpoints) != 0 {
 			t.Fatalf("wrong number of checkpoints %v (zero expected)", checkpoints)
 		}
+	})
+}
+
+func TestIssue1376(t *testing.T) {
+	// Backward Continue should terminate when it encounters the start of the process.
+	protest.AllowRecording(t)
+	withTestRecording("continuetestprog", t, func(p *gdbserial.Process, fixture protest.Fixture) {
+		bp := setFunctionBreakpoint(p, t, "main.main")
+		assertNoError(proc.Continue(p), t, "Continue (forward)")
+		_, err := p.ClearBreakpoint(bp.Addr)
+		assertNoError(err, t, "ClearBreakpoint")
+		assertNoError(p.Direction(proc.Backward), t, "Switching to backward direction")
+		assertNoError(proc.Continue(p), t, "Continue (backward)")
 	})
 }

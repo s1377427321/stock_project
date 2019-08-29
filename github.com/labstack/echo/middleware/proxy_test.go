@@ -7,31 +7,9 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/labstack/echo"
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 )
-
-type (
-	closeNotifyRecorder struct {
-		*httptest.ResponseRecorder
-		closed chan bool
-	}
-)
-
-func newCloseNotifyRecorder() *closeNotifyRecorder {
-	return &closeNotifyRecorder{
-		httptest.NewRecorder(),
-		make(chan bool, 1),
-	}
-}
-
-func (c *closeNotifyRecorder) close() {
-	c.closed <- true
-}
-
-func (c *closeNotifyRecorder) CloseNotify() <-chan bool {
-	return c.closed
-}
 
 func TestProxy(t *testing.T) {
 	// Setup
@@ -70,8 +48,8 @@ func TestProxy(t *testing.T) {
 	// Random
 	e := echo.New()
 	e.Use(Proxy(rb))
-	req := httptest.NewRequest(echo.GET, "/", nil)
-	rec := newCloseNotifyRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	body := rec.Body.String()
 	expected := map[string]bool{
@@ -92,11 +70,11 @@ func TestProxy(t *testing.T) {
 	rrb := NewRoundRobinBalancer(targets)
 	e = echo.New()
 	e.Use(Proxy(rrb))
-	rec = newCloseNotifyRecorder()
+	rec = httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	body = rec.Body.String()
 	assert.Equal(t, "target 1", body)
-	rec = newCloseNotifyRecorder()
+	rec = httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	body = rec.Body.String()
 	assert.Equal(t, "target 2", body)
@@ -124,4 +102,20 @@ func TestProxy(t *testing.T) {
 	req.URL.Path = "/users/jack/orders/1"
 	e.ServeHTTP(rec, req)
 	assert.Equal(t, "/user/jack/order/1", req.URL.Path)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// ProxyTarget is set in context
+	contextObserver := func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) (err error) {
+			next(c)
+			assert.Contains(t, targets, c.Get("target"), "target is not set in context")
+			return nil
+		}
+	}
+	rrb1 := NewRoundRobinBalancer(targets)
+	e = echo.New()
+	e.Use(contextObserver)
+	e.Use(Proxy(rrb1))
+	rec = httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
 }

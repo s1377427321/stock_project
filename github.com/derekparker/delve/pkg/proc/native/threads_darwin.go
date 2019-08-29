@@ -1,9 +1,12 @@
+//+build darwin,macnative
+
 package native
 
 // #include "threads_darwin.h"
 // #include "proc_darwin.h"
 import "C"
 import (
+	"errors"
 	"fmt"
 	"unsafe"
 
@@ -109,7 +112,7 @@ func (t *Thread) Stopped() bool {
 
 func (t *Thread) WriteMemory(addr uintptr, data []byte) (int, error) {
 	if t.dbp.exited {
-		return 0, proc.ProcessExitedError{Pid: t.dbp.pid}
+		return 0, proc.ErrProcessExited{Pid: t.dbp.pid}
 	}
 	if len(data) == 0 {
 		return 0, nil
@@ -127,7 +130,7 @@ func (t *Thread) WriteMemory(addr uintptr, data []byte) (int, error) {
 
 func (t *Thread) ReadMemory(buf []byte, addr uintptr) (int, error) {
 	if t.dbp.exited {
-		return 0, proc.ProcessExitedError{Pid: t.dbp.pid}
+		return 0, proc.ErrProcessExited{Pid: t.dbp.pid}
 	}
 	if len(buf) == 0 {
 		return 0, nil
@@ -143,4 +146,8 @@ func (t *Thread) ReadMemory(buf []byte, addr uintptr) (int, error) {
 		return 0, fmt.Errorf("could not read memory")
 	}
 	return len(buf), nil
+}
+
+func (t *Thread) restoreRegisters(sr proc.Registers) error {
+	return errors.New("not implemented")
 }

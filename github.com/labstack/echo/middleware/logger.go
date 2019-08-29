@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"strconv"
@@ -9,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/labstack/echo"
+	"github.com/labstack/echo/v4"
 	"github.com/labstack/gommon/color"
 	"github.com/valyala/fasttemplate"
 )
@@ -20,7 +21,7 @@ type (
 		// Skipper defines a function to skip middleware.
 		Skipper Skipper
 
-		// Tags to constructed the logger format.
+		// Tags to construct the logger format.
 		//
 		// - time_unix
 		// - time_unix_nano
@@ -33,9 +34,11 @@ type (
 		// - host
 		// - method
 		// - path
+		// - protocol
 		// - referer
 		// - user_agent
 		// - status
+		// - error
 		// - latency (In nanoseconds)
 		// - latency_human (Human readable)
 		// - bytes_in (Bytes received)
@@ -66,10 +69,10 @@ var (
 	// DefaultLoggerConfig is the default Logger middleware config.
 	DefaultLoggerConfig = LoggerConfig{
 		Skipper: DefaultSkipper,
-		Format: `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}","host":"${host}",` +
-			`"method":"${method}","uri":"${uri}","status":${status}, "latency":${latency},` +
-			`"latency_human":"${latency_human}","bytes_in":${bytes_in},` +
-			`"bytes_out":${bytes_out}}` + "\n",
+		Format: `{"time":"${time_rfc3339_nano}","id":"${id}","remote_ip":"${remote_ip}",` +
+			`"host":"${host}","method":"${method}","uri":"${uri}","user_agent":"${user_agent}",` +
+			`"status":${status},"error":"${error}","latency":${latency},"latency_human":"${latency_human}"` +
+			`,"bytes_in":${bytes_in},"bytes_out":${bytes_out}}` + "\n",
 		CustomTimeFormat: "2006-01-02 15:04:05.00000",
 		Output:           os.Stdout,
 		colorer:          color.New(),
@@ -153,6 +156,8 @@ func LoggerWithConfig(config LoggerConfig) echo.MiddlewareFunc {
 						p = "/"
 					}
 					return buf.WriteString(p)
+				case "protocol":
+					return buf.WriteString(req.Proto)
 				case "referer":
 					return buf.WriteString(req.Referer())
 				case "user_agent":
@@ -169,6 +174,13 @@ func LoggerWithConfig(config LoggerConfig) echo.MiddlewareFunc {
 						s = config.colorer.Cyan(n)
 					}
 					return buf.WriteString(s)
+				case "error":
+					if err != nil {
+						// Error may contain invalid JSON e.g. `"`
+						b, _ := json.Marshal(err.Error())
+						b = b[1 : len(b)-1]
+						return buf.Write(b)
+					}
 				case "latency":
 					l := stop.Sub(start)
 					return buf.WriteString(strconv.FormatInt(int64(l), 10))

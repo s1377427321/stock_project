@@ -1,0 +1,5 @@
+{
+    "topics": ["Topic-Server-Log"],
+    "servers": ["172.16.0.189:9092","172.16.0.190:9092","172.16.0.191:9092"],
+    "consumerGroup": "Consumer-Group-Server-Log"
+}

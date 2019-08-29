@@ -11,6 +11,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/exec"
 	"reflect"
 	"regexp"
 	"sort"
@@ -31,6 +32,7 @@ type cmdPrefix int
 const (
 	noPrefix = cmdPrefix(0)
 	onPrefix = cmdPrefix(1 << iota)
+	deferredPrefix
 )
 
 type callContext struct {
@@ -80,10 +82,18 @@ type Commands struct {
 }
 
 var (
-	LongLoadConfig  = api.LoadConfig{true, 1, 64, 64, -1}
+	// LongLoadConfig loads more information:
+	// * Follows pointers
+	// * Loads more array values
+	// * Does not limit struct fields
+	LongLoadConfig = api.LoadConfig{true, 1, 64, 64, -1}
+	// ShortLoadConfig loads less information, not following pointers
+	// and limiting struct fields loaded to 3.
 	ShortLoadConfig = api.LoadConfig{false, 0, 64, 0, 3}
 )
 
+// ByFirstAlias will sort by the first
+// alias of a command.
 type ByFirstAlias []command
 
 func (a ByFirstAlias) Len() int           { return len(a) }
@@ -116,18 +126,34 @@ A tracepoint is a breakpoint that does not stop the execution of the program, in
 See also: "help on", "help cond" and "help clear"`},
 		{aliases: []string{"restart", "r"}, cmdFn: restart, helpMsg: `Restart process.
 
-  restart [checkpoint]
-  restart [-noargs] newargv...
+	restart [checkpoint]
+	restart [-noargs] newargv...
 
-  For recorded processes restarts from the start or from the specified
-  checkpoint.  For normal processes restarts the process, optionally changing
-  the arguments.  With -noargs, the process starts with an empty commandline.
+For recorded processes restarts from the start or from the specified
+checkpoint.  For normal processes restarts the process, optionally changing
+the arguments.  With -noargs, the process starts with an empty commandline.
 `},
 		{aliases: []string{"continue", "c"}, cmdFn: c.cont, helpMsg: "Run until breakpoint or program termination."},
 		{aliases: []string{"step", "s"}, cmdFn: c.step, helpMsg: "Single step through program."},
 		{aliases: []string{"step-instruction", "si"}, cmdFn: c.stepInstruction, helpMsg: "Single step a single cpu instruction."},
 		{aliases: []string{"next", "n"}, cmdFn: c.next, helpMsg: "Step over to next source line."},
 		{aliases: []string{"stepout"}, cmdFn: c.stepout, helpMsg: "Step out of the current function."},
+		{aliases: []string{"call"}, cmdFn: c.call, helpMsg: `Resumes process, injecting a function call (EXPERIMENTAL!!!)
+	
+	call [-unsafe] <function call expression>
+	
+Current limitations:
+- only pointers to stack-allocated objects can be passed as argument.
+- only some automatic type conversions are supported.
+- functions can only be called on running goroutines that are not
+  executing the runtime.
+- the current goroutine needs to have at least 256 bytes of free space on
+  the stack.
+- functions can only be called when the goroutine is stopped at a safe
+  point.
+- calling a function will resume execution of all goroutines.
+- only supported on linux's native backend.
+`},
 		{aliases: []string{"threads"}, cmdFn: threads, helpMsg: "Print out info for every traced thread."},
 		{aliases: []string{"thread", "tr"}, cmdFn: thread, helpMsg: `Switch to the specified thread.
 
@@ -142,13 +168,15 @@ See also: "help on", "help cond" and "help clear"`},
 If called with the linespec argument it will delete all the breakpoints matching the linespec. If linespec is omitted all breakpoints are deleted.`},
 		{aliases: []string{"goroutines"}, cmdFn: goroutines, helpMsg: `List program goroutines.
 
-	goroutines [-u (default: user location)|-r (runtime location)|-g (go statement location)]
+	goroutines [-u (default: user location)|-r (runtime location)|-g (go statement location)|-s (start location)] [ -t (stack trace)]
 
 Print out info for every goroutine. The flag controls what information is shown along with each goroutine:
 
 	-u	displays location of topmost stackframe in user code
 	-r	displays location of topmost stackframe (including frames inside private runtime functions)
 	-g	displays location of go instruction that created the goroutine
+	-s	displays location of the start function
+	-t	displays stack trace of goroutine
 
 If no flag is specified the default is -u.`},
 		{aliases: []string{"goroutine"}, allowedPrefixes: onPrefix, cmdFn: c.goroutine, helpMsg: `Shows or changes current goroutine
@@ -161,14 +189,14 @@ Called without arguments it will show information about the current goroutine.
 Called with a single argument it will switch to the specified goroutine.
 Called with more arguments it will execute a command on the specified goroutine.`},
 		{aliases: []string{"breakpoints", "bp"}, cmdFn: breakpoints, helpMsg: "Print out info for active breakpoints."},
-		{aliases: []string{"print", "p"}, allowedPrefixes: onPrefix, cmdFn: printVar, helpMsg: `Evaluate an expression.
+		{aliases: []string{"print", "p"}, allowedPrefixes: onPrefix | deferredPrefix, cmdFn: printVar, helpMsg: `Evaluate an expression.
 
 	[goroutine <n>] [frame <m>] print <expression>
 
 See $GOPATH/src/github.com/derekparker/delve/Documentation/cli/expr.md for a description of supported expressions.`},
 		{aliases: []string{"whatis"}, cmdFn: whatisCommand, helpMsg: `Prints type of an expression.
 
-		whatis <expression>.`},
+	whatis <expression>`},
 		{aliases: []string{"set"}, cmdFn: setVar, helpMsg: `Changes the value of a variable.
 
 	[goroutine <n>] [frame <m>] set <variable> = <value>
@@ -189,12 +217,12 @@ If regex is specified only the functions matching it will be returned.`},
 	types [<regex>]
 
 If regex is specified only the types matching it will be returned.`},
-		{aliases: []string{"args"}, allowedPrefixes: onPrefix, cmdFn: args, helpMsg: `Print function arguments.
+		{aliases: []string{"args"}, allowedPrefixes: onPrefix | deferredPrefix, cmdFn: args, helpMsg: `Print function arguments.
 
 	[goroutine <n>] [frame <m>] args [-v] [<regex>]
 
 If regex is specified only function arguments with a name matching it will be returned. If -v is specified more information about each function argument will be shown.`},
-		{aliases: []string{"locals"}, allowedPrefixes: onPrefix, cmdFn: locals, helpMsg: `Print local variables.
+		{aliases: []string{"locals"}, allowedPrefixes: onPrefix | deferredPrefix, cmdFn: locals, helpMsg: `Print local variables.
 
 	[goroutine <n>] [frame <m>] locals [-v] [<regex>]
 
@@ -211,7 +239,11 @@ If regex is specified only package variables with a name matching it will be ret
 	regs [-a]
 
 Argument -a shows more registers.`},
-		{aliases: []string{"exit", "quit", "q"}, cmdFn: exitCommand, helpMsg: "Exit the debugger."},
+		{aliases: []string{"exit", "quit", "q"}, cmdFn: exitCommand, helpMsg: `Exit the debugger.
+		
+	exit [-c]
+	
+When connected to a headless instance started with the --accept-multiclient, pass -c to resume the execution of the target process before disconnecting.`},
 		{aliases: []string{"list", "ls", "l"}, cmdFn: listCommand, helpMsg: `Show source code.
 
 	[goroutine <n>] [frame <m>] list [<linespec>]
@@ -219,10 +251,11 @@ Argument -a shows more registers.`},
 Show source around current point or provided linespec.`},
 		{aliases: []string{"stack", "bt"}, allowedPrefixes: onPrefix, cmdFn: stackCommand, helpMsg: `Print stack trace.
 
-	[goroutine <n>] [frame <m>] stack [<depth>] [-full] [-g] [-s] [-offsets]
+	[goroutine <n>] [frame <m>] stack [<depth>] [-full] [-offsets] [-defer]
 
 	-full		every stackframe is decorated with the value of its local variables and arguments.
-	-offsets	prints frame offset of each frame
+	-offsets	prints frame offset of each frame.
+	-defer		prints deferred function call stack for each frame.
 `},
 		{aliases: []string{"frame"},
 			cmdFn: func(t *Term, ctx callContext, arg string) error {
@@ -230,8 +263,8 @@ Show source around current point or provided linespec.`},
 			},
 			helpMsg: `Set the current frame, or execute command on a different frame.
 
-  frame <m>
-  frame <m> <command>
+	frame <m>
+	frame <m> <command>
 
 The first form sets frame used by subsequent commands such as "print" or "set".
 The second form runs the command on the given frame.`},
@@ -241,8 +274,8 @@ The second form runs the command on the given frame.`},
 			},
 			helpMsg: `Move the current frame up.
 
-  up [<m>]
-  up [<m>] <command>
+	up [<m>]
+	up [<m>] <command>
 
 Move the current frame up by <m>. The second form runs the command on the given frame.`},
 		{aliases: []string{"down"},
@@ -251,10 +284,15 @@ Move the current frame up by <m>. The second form runs the command on the given 
 			},
 			helpMsg: `Move the current frame down.
 
-  down [<m>]
-  down [<m>] <command>
+	down [<m>]
+	down [<m>] <command>
 
 Move the current frame down by <m>. The second form runs the command on the given frame.`},
+		{aliases: []string{"deferred"}, cmdFn: c.deferredCommand, helpMsg: `Executes command in the context of a deferred call.
+
+	deferred <n> <command>
+
+Executes the specified command (print, args, locals) in the context of the n-th deferred call in the current frame.`},
 		{aliases: []string{"source"}, cmdFn: c.sourceCommand, helpMsg: `Executes a file containing a list of delve commands
 
 	source <path>`},
@@ -299,6 +337,12 @@ Adds or removes a path substitution rule.
 	config alias <alias>
 
 Defines <alias> as an alias to <command> or removes an alias.`},
+
+		{aliases: []string{"edit", "ed"}, cmdFn: edit, helpMsg: `Open where you are in $DELVE_EDITOR or $EDITOR
+
+	edit [locspec]
+	
+If locspec is omitted edit will open the current source file in the editor, otherwise it will open the specified location.`},
 	}
 
 	if client == nil || client.Recorded() {
@@ -312,7 +356,9 @@ Defines <alias> as an alias to <command> or removes an alias.`},
 			cmdFn:   checkpoint,
 			helpMsg: `Creates a checkpoint at the current position.
 
-	checkpoint [where]`,
+	checkpoint [note]
+
+The "note" is arbitrary text that can be used to identify the checkpoint, if it is not specified it defaults to the current filename:line position.`,
 		})
 		c.cmds = append(c.cmds, command{
 			aliases: []string{"checkpoints"},
@@ -378,6 +424,7 @@ func (c *Commands) Find(cmdstr string, prefix cmdPrefix) cmdfunc {
 	return noCmdAvailable
 }
 
+// CallWithContext takes a command and a context that command should be executed in.
 func (c *Commands) CallWithContext(cmdstr string, t *Term, ctx callContext) error {
 	vals := strings.SplitN(strings.TrimSpace(cmdstr), " ", 2)
 	cmdname := vals[0]
@@ -388,8 +435,9 @@ func (c *Commands) CallWithContext(cmdstr string, t *Term, ctx callContext) erro
 	return c.Find(cmdname, ctx.Prefix)(t, ctx, args)
 }
 
+// Call takes a command to execute.
 func (c *Commands) Call(cmdstr string, t *Term) error {
-	ctx := callContext{Prefix: noPrefix, Scope: api.EvalScope{GoroutineID: -1, Frame: c.frame}}
+	ctx := callContext{Prefix: noPrefix, Scope: api.EvalScope{GoroutineID: -1, Frame: c.frame, DeferredCall: 0}}
 	return c.CallWithContext(cmdstr, t, ctx)
 }
 
@@ -479,7 +527,7 @@ func threads(t *Term, ctx callContext, args string) error {
 		if th.Function != nil {
 			fmt.Printf("%sThread %d at %#v %s:%d %s\n",
 				prefix, th.ID, th.PC, ShortenFilePath(th.File),
-				th.Line, th.Function.Name)
+				th.Line, th.Function.Name())
 		} else {
 			fmt.Printf("%sThread %s\n", prefix, formatThread(th))
 		}
@@ -525,22 +573,29 @@ func (a byGoroutineID) Less(i, j int) bool { return a[i].ID < a[j].ID }
 func goroutines(t *Term, ctx callContext, argstr string) error {
 	args := strings.Split(argstr, " ")
 	var fgl = fglUserCurrent
+	bPrintStack := false
 
 	switch len(args) {
 	case 0:
 		// nothing to do
-	case 1:
-		switch args[0] {
-		case "-u":
-			fgl = fglUserCurrent
-		case "-r":
-			fgl = fglRuntimeCurrent
-		case "-g":
-			fgl = fglGo
-		case "":
-			// nothing to do
-		default:
-			return fmt.Errorf("wrong argument: '%s'", args[0])
+	case 1, 2:
+		for _, arg := range args {
+			switch arg {
+			case "-u":
+				fgl = fglUserCurrent
+			case "-r":
+				fgl = fglRuntimeCurrent
+			case "-g":
+				fgl = fglGo
+			case "-s":
+				fgl = fglStart
+			case "-t":
+				bPrintStack = true
+			case "":
+				// nothing to do
+			default:
+				return fmt.Errorf("wrong argument: '%s'", arg)
+			}
 		}
 	default:
 		return fmt.Errorf("too many arguments")
@@ -561,6 +616,13 @@ func goroutines(t *Term, ctx callContext, argstr string) error {
 			prefix = "* "
 		}
 		fmt.Printf("%sGoroutine %s\n", prefix, formatGoroutine(g, fgl))
+		if bPrintStack {
+			stack, err := t.client.Stacktrace(g.ID, 10, false, nil)
+			if err != nil {
+				return err
+			}
+			printStack(stack, "\t", false)
+		}
 	}
 	return nil
 }
@@ -644,7 +706,7 @@ func (c *Commands) frameCommand(t *Term, ctx callContext, argstr string, directi
 	if frame < 0 {
 		return fmt.Errorf("Invalid frame %d", frame)
 	}
-	stack, err := t.client.Stacktrace(ctx.Scope.GoroutineID, frame, nil)
+	stack, err := t.client.Stacktrace(ctx.Scope.GoroutineID, frame, false, nil)
 	if err != nil {
 		return err
 	}
@@ -661,6 +723,22 @@ func (c *Commands) frameCommand(t *Term, ctx callContext, argstr string, directi
 	fmt.Printf("Frame %d: %s:%d (PC: %x)\n", frame, ShortenFilePath(th.File), th.Line, th.PC)
 	printfile(t, th.File, th.Line, true)
 	return nil
+}
+
+func (c *Commands) deferredCommand(t *Term, ctx callContext, argstr string) error {
+	ctx.Prefix = deferredPrefix
+
+	space := strings.Index(argstr, " ")
+
+	var err error
+	ctx.Scope.DeferredCall, err = strconv.Atoi(argstr[:space])
+	if err != nil {
+		return err
+	}
+	if ctx.Scope.DeferredCall <= 0 {
+		return errors.New("argument of deferred must be a number greater than 0 (use 'stack -defer' to see the list of deferred calls)")
+	}
+	return c.CallWithContext(argstr[space:], t, ctx)
 }
 
 func printscope(t *Term) error {
@@ -689,19 +767,19 @@ const (
 	fglRuntimeCurrent = formatGoroutineLoc(iota)
 	fglUserCurrent
 	fglGo
+	fglStart
 )
 
 func formatLocation(loc api.Location) string {
-	fname := ""
-	if loc.Function != nil {
-		fname = loc.Function.Name
-	}
-	return fmt.Sprintf("%s:%d %s (%#v)", ShortenFilePath(loc.File), loc.Line, fname, loc.PC)
+	return fmt.Sprintf("%s:%d %s (%#v)", ShortenFilePath(loc.File), loc.Line, loc.Function.Name(), loc.PC)
 }
 
 func formatGoroutine(g *api.Goroutine, fgl formatGoroutineLoc) string {
 	if g == nil {
 		return "<nil>"
+	}
+	if g.Unreadable != "" {
+		return fmt.Sprintf("(unreadable %s)", g.Unreadable)
 	}
 	var locname string
 	var loc api.Location
@@ -715,6 +793,9 @@ func formatGoroutine(g *api.Goroutine, fgl formatGoroutineLoc) string {
 	case fglGo:
 		locname = "Go"
 		loc = g.GoStatementLoc
+	case fglStart:
+		locname = "Start"
+		loc = g.StartLoc
 	}
 	thread := ""
 	if g.ThreadID != 0 {
@@ -724,11 +805,12 @@ func formatGoroutine(g *api.Goroutine, fgl formatGoroutineLoc) string {
 }
 
 func writeGoroutineLong(w io.Writer, g *api.Goroutine, prefix string) {
-	fmt.Fprintf(w, "%sGoroutine %d:\n%s\tRuntime: %s\n%s\tUser: %s\n%s\tGo: %s\n",
+	fmt.Fprintf(w, "%sGoroutine %d:\n%s\tRuntime: %s\n%s\tUser: %s\n%s\tGo: %s\n%s\tStart: %s\n",
 		prefix, g.ID,
 		prefix, formatLocation(g.CurrentLoc),
 		prefix, formatLocation(g.UserCurrentLoc),
-		prefix, formatLocation(g.GoStatementLoc))
+		prefix, formatLocation(g.GoStatementLoc),
+		prefix, formatLocation(g.StartLoc))
 }
 
 func parseArgs(args string) ([]string, error) {
@@ -793,10 +875,12 @@ func restart(t *Term, ctx callContext, args string) error {
 	return nil
 }
 
-func printfileNoState(t *Term) {
-	if state, _ := t.client.GetState(); state != nil && state.CurrentThread != nil {
-		printfile(t, state.CurrentThread.File, state.CurrentThread.Line, true)
+func printcontextNoState(t *Term) {
+	state, _ := t.client.GetState()
+	if state == nil || state.CurrentThread == nil {
+		return
 	}
+	printcontext(t, state)
 }
 
 func (c *Commands) cont(t *Term, ctx callContext, args string) error {
@@ -805,7 +889,7 @@ func (c *Commands) cont(t *Term, ctx callContext, args string) error {
 	var state *api.DebuggerState
 	for state = range stateChan {
 		if state.Err != nil {
-			printfileNoState(t)
+			printcontextNoState(t)
 			return state.Err
 		}
 		printcontext(t, state)
@@ -825,7 +909,7 @@ func continueUntilCompleteNext(t *Term, state *api.DebuggerState, op string) err
 		var state *api.DebuggerState
 		for state = range stateChan {
 			if state.Err != nil {
-				printfileNoState(t)
+				printcontextNoState(t)
 				return state.Err
 			}
 			printcontext(t, state)
@@ -861,21 +945,25 @@ func (c *Commands) step(t *Term, ctx callContext, args string) error {
 	c.frame = 0
 	state, err := exitedToError(t.client.Step())
 	if err != nil {
-		printfileNoState(t)
+		printcontextNoState(t)
 		return err
 	}
 	printcontext(t, state)
 	return continueUntilCompleteNext(t, state, "step")
 }
 
+var notOnFrameZeroErr = errors.New("not on topmost frame")
+
 func (c *Commands) stepInstruction(t *Term, ctx callContext, args string) error {
 	if err := scopePrefixSwitch(t, ctx); err != nil {
 		return err
 	}
+	if c.frame != 0 {
+		return notOnFrameZeroErr
+	}
 	state, err := exitedToError(t.client.StepInstruction())
-	c.frame = 0
 	if err != nil {
-		printfileNoState(t)
+		printcontextNoState(t)
 		return err
 	}
 	printcontext(t, state)
@@ -887,10 +975,12 @@ func (c *Commands) next(t *Term, ctx callContext, args string) error {
 	if err := scopePrefixSwitch(t, ctx); err != nil {
 		return err
 	}
+	if c.frame != 0 {
+		return notOnFrameZeroErr
+	}
 	state, err := exitedToError(t.client.Next())
-	c.frame = 0
 	if err != nil {
-		printfileNoState(t)
+		printcontextNoState(t)
 		return err
 	}
 	printcontext(t, state)
@@ -901,14 +991,36 @@ func (c *Commands) stepout(t *Term, ctx callContext, args string) error {
 	if err := scopePrefixSwitch(t, ctx); err != nil {
 		return err
 	}
+	if c.frame != 0 {
+		return notOnFrameZeroErr
+	}
 	state, err := exitedToError(t.client.StepOut())
-	c.frame = 0
 	if err != nil {
-		printfileNoState(t)
+		printcontextNoState(t)
 		return err
 	}
 	printcontext(t, state)
 	return continueUntilCompleteNext(t, state, "stepout")
+}
+
+func (c *Commands) call(t *Term, ctx callContext, args string) error {
+	if err := scopePrefixSwitch(t, ctx); err != nil {
+		return err
+	}
+	const unsafePrefix = "-unsafe "
+	unsafe := false
+	if strings.HasPrefix(args, unsafePrefix) {
+		unsafe = true
+		args = args[len(unsafePrefix):]
+	}
+	state, err := exitedToError(t.client.Call(args, unsafe))
+	c.frame = 0
+	if err != nil {
+		printcontextNoState(t)
+		return err
+	}
+	printcontext(t, state)
+	return continueUntilCompleteNext(t, state, "call")
 }
 
 func clear(t *Term, ctx callContext, args string) error {
@@ -1069,6 +1181,23 @@ func breakpoint(t *Term, ctx callContext, args string) error {
 
 func tracepoint(t *Term, ctx callContext, args string) error {
 	return setBreakpoint(t, ctx, true, args)
+}
+
+func edit(t *Term, ctx callContext, args string) error {
+	file, lineno, _, err := getLocation(t, ctx, args, false)
+	if err != nil {
+		return err
+	}
+
+	var editor string
+	if editor = os.Getenv("DELVE_EDITOR"); editor == "" {
+		if editor = os.Getenv("EDITOR"); editor == "" {
+			return fmt.Errorf("Neither DELVE_EDITOR or EDITOR is set")
+		}
+	}
+
+	cmd := exec.Command(editor, fmt.Sprintf("+%d", lineno), file)
+	return cmd.Run()
 }
 
 func printVar(t *Term, ctx callContext, args string) error {
@@ -1255,7 +1384,7 @@ func stackCommand(t *Term, ctx callContext, args string) error {
 	if sa.full {
 		cfg = &ShortLoadConfig
 	}
-	stack, err := t.client.Stacktrace(ctx.Scope.GoroutineID, sa.depth, cfg)
+	stack, err := t.client.Stacktrace(ctx.Scope.GoroutineID, sa.depth, sa.readDefers, cfg)
 	if err != nil {
 		return err
 	}
@@ -1264,14 +1393,15 @@ func stackCommand(t *Term, ctx callContext, args string) error {
 }
 
 type stackArgs struct {
-	depth   int
-	full    bool
-	offsets bool
+	depth      int
+	full       bool
+	offsets    bool
+	readDefers bool
 }
 
 func parseStackArgs(argstr string) (stackArgs, error) {
 	r := stackArgs{
-		depth: 10,
+		depth: 50,
 		full:  false,
 	}
 	if argstr != "" {
@@ -1282,6 +1412,8 @@ func parseStackArgs(argstr string) (stackArgs, error) {
 				r.full = true
 			case "-offsets":
 				r.offsets = true
+			case "-defer":
+				r.readDefers = true
 			default:
 				n, err := strconv.Atoi(args[i])
 				if err != nil {
@@ -1294,53 +1426,69 @@ func parseStackArgs(argstr string) (stackArgs, error) {
 	return r, nil
 }
 
-func listCommand(t *Term, ctx callContext, args string) error {
+// getLocation returns the current location or the locations specified by the argument.
+// getLocation is used to process the argument of list and edit commands.
+func getLocation(t *Term, ctx callContext, args string, showContext bool) (file string, lineno int, showarrow bool, err error) {
 	switch {
 	case len(args) == 0 && !ctx.scoped():
 		state, err := t.client.GetState()
 		if err != nil {
-			return err
+			return "", 0, false, err
 		}
-		printcontext(t, state)
+		if showContext {
+			printcontext(t, state)
+		}
 		if state.SelectedGoroutine != nil {
-			return printfile(t, state.SelectedGoroutine.CurrentLoc.File, state.SelectedGoroutine.CurrentLoc.Line, true)
+			return state.SelectedGoroutine.CurrentLoc.File, state.SelectedGoroutine.CurrentLoc.Line, true, nil
 		}
-		return printfile(t, state.CurrentThread.File, state.CurrentThread.Line, true)
+		return state.CurrentThread.File, state.CurrentThread.Line, true, nil
 
 	case len(args) == 0 && ctx.scoped():
-		locs, err := t.client.Stacktrace(ctx.Scope.GoroutineID, ctx.Scope.Frame, nil)
+		locs, err := t.client.Stacktrace(ctx.Scope.GoroutineID, ctx.Scope.Frame, false, nil)
 		if err != nil {
-			return err
+			return "", 0, false, err
 		}
 		if ctx.Scope.Frame >= len(locs) {
-			return fmt.Errorf("Frame %d does not exist in goroutine %d", ctx.Scope.Frame, ctx.Scope.GoroutineID)
+			return "", 0, false, fmt.Errorf("Frame %d does not exist in goroutine %d", ctx.Scope.Frame, ctx.Scope.GoroutineID)
 		}
 		loc := locs[ctx.Scope.Frame]
 		gid := ctx.Scope.GoroutineID
 		if gid < 0 {
 			state, err := t.client.GetState()
 			if err != nil {
-				return err
+				return "", 0, false, err
 			}
 			if state.SelectedGoroutine != nil {
 				gid = state.SelectedGoroutine.ID
 			}
 		}
-		fmt.Printf("Goroutine %d frame %d at %s:%d (PC: %#x)\n", gid, ctx.Scope.Frame, loc.File, loc.Line, loc.PC)
-		return printfile(t, loc.File, loc.Line, true)
+		if showContext {
+			fmt.Printf("Goroutine %d frame %d at %s:%d (PC: %#x)\n", gid, ctx.Scope.Frame, loc.File, loc.Line, loc.PC)
+		}
+		return loc.File, loc.Line, true, nil
 
 	default:
 		locs, err := t.client.FindLocation(ctx.Scope, args)
 		if err != nil {
-			return err
+			return "", 0, false, err
 		}
 		if len(locs) > 1 {
-			return debugger.AmbiguousLocationError{Location: args, CandidatesLocation: locs}
+			return "", 0, false, debugger.AmbiguousLocationError{Location: args, CandidatesLocation: locs}
 		}
 		loc := locs[0]
-		fmt.Printf("Showing %s:%d (PC: %#x)\n", loc.File, loc.Line, loc.PC)
-		return printfile(t, loc.File, loc.Line, false)
+		if showContext {
+			fmt.Printf("Showing %s:%d (PC: %#x)\n", loc.File, loc.Line, loc.PC)
+		}
+		return loc.File, loc.Line, false, nil
 	}
+}
+
+func listCommand(t *Term, ctx callContext, args string) error {
+	file, lineno, showarrow, err := getLocation(t, ctx, args, true)
+	if err != nil {
+		return err
+	}
+	return printfile(t, file, lineno, showarrow)
 }
 
 func (c *Commands) sourceCommand(t *Term, ctx callContext, args string) error {
@@ -1418,10 +1566,21 @@ func digits(n int) int {
 	return int(math.Floor(math.Log10(float64(n)))) + 1
 }
 
+const stacktraceTruncatedMessage = "(truncated)"
+
 func printStack(stack []api.Stackframe, ind string, offsets bool) {
 	if len(stack) == 0 {
 		return
 	}
+
+	extranl := offsets
+	for i := range stack {
+		if extranl {
+			break
+		}
+		extranl = extranl || (len(stack[i].Defers) > 0) || (len(stack[i].Arguments) > 0) || (len(stack[i].Locals) > 0)
+	}
+
 	d := digits(len(stack) - 1)
 	fmtstr := "%s%" + strconv.Itoa(d) + "d  0x%016x in %s\n"
 	s := ind + strings.Repeat(" ", d+2+len(ind))
@@ -1431,15 +1590,23 @@ func printStack(stack []api.Stackframe, ind string, offsets bool) {
 			fmt.Printf("%serror: %s\n", s, stack[i].Err)
 			continue
 		}
-		name := "(nil)"
-		if stack[i].Function != nil {
-			name = stack[i].Function.Name
-		}
-		fmt.Printf(fmtstr, ind, i, stack[i].PC, name)
+		fmt.Printf(fmtstr, ind, i, stack[i].PC, stack[i].Function.Name())
 		fmt.Printf("%sat %s:%d\n", s, ShortenFilePath(stack[i].File), stack[i].Line)
 
 		if offsets {
 			fmt.Printf("%sframe: %+#x frame pointer %+#x\n", s, stack[i].FrameOffset, stack[i].FramePointerOffset)
+		}
+
+		for j, d := range stack[i].Defers {
+			deferHeader := fmt.Sprintf("%s    defer %d: ", s, j+1)
+			s2 := strings.Repeat(" ", len(deferHeader))
+			if d.Unreadable != "" {
+				fmt.Printf("%s(unreadable defer: %s)\n", deferHeader, d.Unreadable)
+				continue
+			}
+			fmt.Printf("%s%#016x in %s\n", deferHeader, d.DeferredLoc.PC, d.DeferredLoc.Function.Name())
+			fmt.Printf("%sat %s:%d\n", s2, d.DeferredLoc.File, d.DeferredLoc.Line)
+			fmt.Printf("%sdeferred by %s at %s:%d\n", s2, d.DeferLoc.Function.Name(), d.DeferLoc.File, d.DeferLoc.Line)
 		}
 
 		for j := range stack[i].Arguments {
@@ -1448,10 +1615,18 @@ func printStack(stack []api.Stackframe, ind string, offsets bool) {
 		for j := range stack[i].Locals {
 			fmt.Printf("%s    %s = %s\n", s, stack[i].Locals[j].Name, stack[i].Locals[j].SinglelineString())
 		}
+
+		if extranl {
+			fmt.Println()
+		}
+	}
+
+	if len(stack) > 0 && !stack[len(stack)-1].Bottom {
+		fmt.Printf("%s"+stacktraceTruncatedMessage+"\n", ind)
 	}
 }
 
-func printcontext(t *Term, state *api.DebuggerState) error {
+func printcontext(t *Term, state *api.DebuggerState) {
 	for i := range state.Threads {
 		if (state.CurrentThread != nil) && (state.Threads[i].ID == state.CurrentThread.ID) {
 			continue
@@ -1463,7 +1638,7 @@ func printcontext(t *Term, state *api.DebuggerState) error {
 
 	if state.CurrentThread == nil {
 		fmt.Println("No current thread available")
-		return nil
+		return
 	}
 
 	var th *api.Thread
@@ -1478,14 +1653,14 @@ func printcontext(t *Term, state *api.DebuggerState) error {
 		}
 		if th == nil {
 			printcontextLocation(state.SelectedGoroutine.CurrentLoc)
-			return nil
+			return
 		}
 	}
 
 	if th.File == "" {
 		fmt.Printf("Stopped at: 0x%x\n", state.CurrentThread.PC)
 		t.Println("=>", "no source available")
-		return nil
+		return
 	}
 
 	printcontextThread(t, th)
@@ -1493,16 +1668,25 @@ func printcontext(t *Term, state *api.DebuggerState) error {
 	if state.When != "" {
 		fmt.Println(state.When)
 	}
-
-	return nil
 }
 
 func printcontextLocation(loc api.Location) {
-	fmt.Printf("> %s() %s:%d (PC: %#v)\n", loc.Function.Name, ShortenFilePath(loc.File), loc.Line, loc.PC)
+	fmt.Printf("> %s() %s:%d (PC: %#v)\n", loc.Function.Name(), ShortenFilePath(loc.File), loc.Line, loc.PC)
 	if loc.Function != nil && loc.Function.Optimized {
 		fmt.Println(optimizedFunctionWarning)
 	}
 	return
+}
+
+func printReturnValues(th *api.Thread) {
+	if th.ReturnValues == nil {
+		return
+	}
+	fmt.Println("Values returned:")
+	for _, v := range th.ReturnValues {
+		fmt.Printf("\t%s: %s\n", v.Name, v.MultilineString("\t"))
+	}
+	fmt.Println()
 }
 
 func printcontextThread(t *Term, th *api.Thread) {
@@ -1510,6 +1694,7 @@ func printcontextThread(t *Term, th *api.Thread) {
 
 	if th.Breakpoint == nil {
 		printcontextLocation(api.Location{PC: th.PC, File: th.File, Line: th.Line, Function: th.Function})
+		printReturnValues(th)
 		return
 	}
 
@@ -1517,7 +1702,14 @@ func printcontextThread(t *Term, th *api.Thread) {
 	if th.BreakpointInfo != nil && th.Breakpoint.LoadArgs != nil && *th.Breakpoint.LoadArgs == ShortLoadConfig {
 		var arg []string
 		for _, ar := range th.BreakpointInfo.Arguments {
-			arg = append(arg, ar.SinglelineString())
+			// For AI compatibility return values are included in the
+			// argument list. This is a relic of the dark ages when the
+			// Go debug information did not distinguish between the two.
+			// Filter them out here instead, so during trace operations
+			// they are not printed as an argument.
+			if (ar.Flags & api.VariableArgument) != 0 {
+				arg = append(arg, ar.SinglelineString())
+			}
 		}
 		args = strings.Join(arg, ", ")
 	}
@@ -1530,7 +1722,7 @@ func printcontextThread(t *Term, th *api.Thread) {
 	if hitCount, ok := th.Breakpoint.HitCount[strconv.Itoa(th.GoroutineID)]; ok {
 		fmt.Printf("> %s%s(%s) %s:%d (hits goroutine(%d):%d total:%d) (PC: %#v)\n",
 			bpname,
-			fn.Name,
+			fn.Name(),
 			args,
 			ShortenFilePath(th.File),
 			th.Line,
@@ -1541,7 +1733,7 @@ func printcontextThread(t *Term, th *api.Thread) {
 	} else {
 		fmt.Printf("> %s%s(%s) %s:%d (hits total:%d) (PC: %#v)\n",
 			bpname,
-			fn.Name,
+			fn.Name(),
 			args,
 			ShortenFilePath(th.File),
 			th.Line,
@@ -1551,6 +1743,8 @@ func printcontextThread(t *Term, th *api.Thread) {
 	if th.Function != nil && th.Function.Optimized {
 		fmt.Println(optimizedFunctionWarning)
 	}
+
+	printReturnValues(th)
 
 	if th.BreakpointInfo != nil {
 		bp := th.Breakpoint
@@ -1642,6 +1836,12 @@ func (ere ExitRequestError) Error() string {
 }
 
 func exitCommand(t *Term, ctx callContext, args string) error {
+	if args == "-c" {
+		if !t.client.IsMulticlient() {
+			return errors.New("not connected to an --accept-multiclient server")
+		}
+		t.quitContinue = true
+	}
 	return ExitRequestError{}
 }
 
@@ -1744,11 +1944,7 @@ func checkpoint(t *Term, ctx callContext, args string) error {
 		if state.SelectedGoroutine != nil {
 			loc = state.SelectedGoroutine.CurrentLoc
 		}
-		fname := "???"
-		if loc.Function != nil {
-			fname = loc.Function.Name
-		}
-		args = fmt.Sprintf("%s() %s:%d (%#x)", fname, loc.File, loc.Line, loc.PC)
+		args = fmt.Sprintf("%s() %s:%d (%#x)", loc.Function.Name(), loc.File, loc.Line, loc.PC)
 	}
 
 	cpid, err := t.client.Checkpoint(args)
@@ -1767,7 +1963,7 @@ func checkpoints(t *Term, ctx callContext, args string) error {
 	}
 	w := new(tabwriter.Writer)
 	w.Init(os.Stdout, 4, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tWhen\tWhere")
+	fmt.Fprintln(w, "ID\tWhen\tNote")
 	for _, cp := range cps {
 		fmt.Fprintf(w, "c%d\t%s\t%s\n", cp.ID, cp.When, cp.Where)
 	}

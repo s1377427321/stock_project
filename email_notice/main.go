@@ -6,10 +6,10 @@ import (
 	"sync"
 	"common/email"
 	"common"
-)
+			)
 
 var mainUrl = "http://hq.sinajs.cn/list=%s"
-var httpPort = ":4661"
+var httpPort = ":5555"
 var emailUrl = "1377427321@qq.com"
 
 var NoticeStockS map[string]*Stock
@@ -43,153 +43,169 @@ func init() {
 	NoticeStockS = make(map[string]*Stock, 0)
 	BuyStocks = make(map[string]*BuyStock, 0)
 
-
 }
 
 //这个程序负债监控股票价格，设置一个最高价格，最低价格，到了这个价格，就会通知用户，去操作
 func main() {
 	go RunHttpServer()
 
-
 	DoInitStock()
 
-	for range time.NewTicker(100 * time.Hour).C {
+	//StopWinLose
+	//swl:=&StopWinLose{}
+	//swl.Init("000895","双汇发展",20.05,1)
+
+	for range time.NewTicker(31 * time.Minute).C {
+		h := time.Now().Hour()
+		if h >= 9 && h < 10 {
+			noticeIsAlive()
+		}
+
+		if h >= 15 && h < 16 {
+			noticeIsAlive()
+		}
 	}
 }
 
+func noticeIsAlive() {
+	ec := &email.EmailContent{
+		NickName:     "文健",
+		Subject:      "alive",
+		BodyContent:  "alive",
+		NoticeEmails: []string{emailUrl},
+	}
+	email.SendEmailTo(emailServer, ec)
+	common.DingDingNotify1("alive")
+}
 
 var InitNoticeStocks []InitNoticeStocksS = []InitNoticeStocksS{
 	InitNoticeStocksS{
-		Money:130000,
-		Name:"华宝添益",
-		Code :"sh511990",
-		Height:100.05,
-		Low:99.95,
+		Money:  130000,
+		Name:   "华宝添益",
+		Code:   "sh511990",
+		Height: 100.05,
+		Low:    99.95,
 	},
-	InitNoticeStocksS{
-		Money:130000,
-		Name:"R001",
-		Code :"sz131810",
-		Height:6,
-		Low:0,
-	},
-	InitNoticeStocksS{
-		Money:130000,
-		Name:"三全食品",
-		Code :"sz002216",
-		Height:8,
-		Low:5.3,
-	},
-
+	//InitNoticeStocksS{
+	//	Money:  130000,
+	//	Name:   "R001",
+	//	Code:   "sz131810",
+	//	Height: 6,
+	//	Low:    0,
+	//},
+	//InitNoticeStocksS{
+	//	Money:  130000,
+	//	Name:   "三全食品",
+	//	Code:   "sz002216",
+	//	Height: 8,
+	//	Low:    5.3,
+	//},
 }
 
 var InitBuyStocks []InitBuyStocksS = []InitBuyStocksS{
-	InitBuyStocksS{
-		Name:"白云机场",
-		Code:"sh600004",
-		Money:130000,
-		Copies:20,
-		Price:13.15,
-	},
-	InitBuyStocksS{
-		Name:"伊利股份",
-		Code:"sh600887",
-		Money:130000,
-		Copies:10,
-		Price:27.81,
-	},
-	InitBuyStocksS{
-		Name:"招商银行",
-		Code:"sh600036",
-		Money:130000,
-		Copies:10,
-		Price:32.9,
-	},
-	InitBuyStocksS{
-		Name:"复星医药",
-		Code:"sh600004",
-		Money:130000,
-		Copies:10,
-		Price:25.76,
-	},
-	InitBuyStocksS{
-		Name:"贵州茅台",
-		Code:"sh600519",
-		Money:130000,
-		Copies:10,
-		Price:717.92,
-	},
-	InitBuyStocksS{
-		Name:"比亚迪",
-		Code:"sz002594",
-		Money:130000,
-		Copies:20,
-		Price:53.80,
-	},
-
-
-	//ETF
-	InitBuyStocksS{
-		Name:"50ETF",
-		Code:"sh510050",
-		Money:130000,
-		Copies:20,
-		Price:2.802,
-	},
-
-	InitBuyStocksS{
-		Name:"300ETF",
-		Code:"sh510300",
-		Money:130000,
-		Copies:20,
-		Price:3.735,
-	},
-
-	InitBuyStocksS{
-		Name:"证券ETF",
-		Code:"sh512880",
-		Money:130000,
-		Copies:20,
-		Price:1.038,
-	},
-
-	InitBuyStocksS{
-		Name:"环保ETF",
-		Code:"sh512580",
-		Money:130000,
-		Copies:20,
-		Price:0.763,
-	},
-
-	InitBuyStocksS{
-		Name:"银行ETF",
-		Code:"sh512800",
-		Money:130000,
-		Copies:20,
-		Price:1.070,
-	},
-
-	InitBuyStocksS{
-		Name:"医药ETF",
-		Code:"sh512010",
-		Money:130000,
-		Copies:20,
-		Price:1.577,
-	},
+	//InitBuyStocksS{
+	//	Name:   "白云机场",
+	//	Code:   "sh600004",
+	//	Money:  130000,
+	//	Copies: 20,
+	//	Price:  13.15,
+	//},
+	//InitBuyStocksS{
+	//	Name:   "伊利股份",
+	//	Code:   "sh600887",
+	//	Money:  130000,
+	//	Copies: 10,
+	//	Price:  27.81,
+	//},
+	//InitBuyStocksS{
+	//	Name:   "招商银行",
+	//	Code:   "sh600036",
+	//	Money:  130000,
+	//	Copies: 10,
+	//	Price:  32.9,
+	//},
+	//InitBuyStocksS{
+	//	Name:   "复星医药",
+	//	Code:   "sh600004",
+	//	Money:  130000,
+	//	Copies: 10,
+	//	Price:  25.76,
+	//},
+	//InitBuyStocksS{
+	//	Name:   "贵州茅台",
+	//	Code:   "sh600519",
+	//	Money:  130000,
+	//	Copies: 10,
+	//	Price:  717.92,
+	//},
+	//InitBuyStocksS{
+	//	Name:   "比亚迪",
+	//	Code:   "sz002594",
+	//	Money:  130000,
+	//	Copies: 20,
+	//	Price:  53.80,
+	//},
+	//
+	//
+	////ETF
+	//InitBuyStocksS{
+	//	Name:   "50ETF",
+	//	Code:   "sh510050",
+	//	Money:  130000,
+	//	Copies: 20,
+	//	Price:  2.802,
+	//},
+	//
+	//InitBuyStocksS{
+	//	Name:   "300ETF",
+	//	Code:   "sh510300",
+	//	Money:  130000,
+	//	Copies: 20,
+	//	Price:  3.735,
+	//},
+	//
+	//InitBuyStocksS{
+	//	Name:   "证券ETF",
+	//	Code:   "sh512880",
+	//	Money:  130000,
+	//	Copies: 20,
+	//	Price:  1.038,
+	//},
+	//
+	//InitBuyStocksS{
+	//	Name:   "环保ETF",
+	//	Code:   "sh512580",
+	//	Money:  130000,
+	//	Copies: 20,
+	//	Price:  0.763,
+	//},
+	//
+	//InitBuyStocksS{
+	//	Name:   "银行ETF",
+	//	Code:   "sh512800",
+	//	Money:  130000,
+	//	Copies: 20,
+	//	Price:  1.070,
+	//},
+	//
+	//InitBuyStocksS{
+	//	Name:   "医药ETF",
+	//	Code:   "sh512010",
+	//	Money:  130000,
+	//	Copies: 20,
+	//	Price:  1.577,
+	//},
 }
 
-func DoInitStock()  {
-	for _,v:=range InitNoticeStocks{
-		AddNoticeStock(v.Code,v.Height,v.Low,v.Money)
+func DoInitStock() {
+	for _, v := range InitNoticeStocks {
+		AddNoticeStock(v.Code, v.Height, v.Low, v.Money)
 	}
 
-	for _,v:=range InitBuyStocks{
-		AddBuyStock(v.Code,v.Price,v.Money,v.Copies)
+	for _, v := range InitBuyStocks {
+		AddBuyStock(v.Code, v.Price, v.Money, v.Copies)
 	}
 }
-
-
-
 
 /*
 华宝添益
@@ -211,5 +227,3 @@ func DoInitStock()  {
 http://hq.sinajs.cn/list=sh000001
 
  */
-
-

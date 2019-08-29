@@ -15,9 +15,10 @@ import (
 	"encoding/csv"
 	"strings"
 	"io"
-
+	_ "github.com/go-sql-driver/mysql"
 	commons "common"
 	"log"
+	"github.com/astaxie/beego"
 )
 
 var Engine *xorm.Engine
@@ -29,6 +30,16 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
+
+	go func() {
+		for range time.NewTicker(20 * time.Second).C {
+			err = Engine.Ping()
+			if err != nil {
+				panic("xorm.Engine Ping Error")
+			}
+		}
+		beego.Info("mysql always connect!")
+	}()
 }
 
 func SaveIncomeDatasToMySQL() {
@@ -168,7 +179,7 @@ func GetAllStocksInfo() ([]*StockBasicInfo, error) {
 }
 
 //trade_his  1  从网络获取个股股价等信息，插入表trade_his中
-func UpdateDayTradeData() []*StockBasicInfo{
+func UpdateDayTradeData() []*StockBasicInfo {
 	stocks, err := GetAllStocksInfo()
 	if err != nil {
 		panic(err)
@@ -419,7 +430,7 @@ func GetFinaIndicatorFromMySQL(code string, start_data, end_data string) []*Stoc
 
 	if err != nil {
 		//panic(fmt.Sprintf("GetFinaIndicatorFromMySQL ERROR %v", err))
-		return  nil
+		return nil
 	}
 
 	for _, v := range sqlRes {

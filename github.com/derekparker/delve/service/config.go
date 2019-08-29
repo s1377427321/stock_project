@@ -29,8 +29,15 @@ type Config struct {
 	// CoreFile specifies the path to the core dump to open.
 	CoreFile string
 
+	// DebugInfoDirectories is the list of directories to look for
+	// when resolving external debug info files.
+	DebugInfoDirectories []string
+
 	// Selects server backend.
 	Backend string
+
+	// Foreground lets target process access stdin.
+	Foreground bool
 
 	// DisconnectChan will be closed by the server when the client disconnects
 	DisconnectChan chan<- struct{}

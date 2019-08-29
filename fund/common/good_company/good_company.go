@@ -135,9 +135,9 @@ func (g *GoodCompany) InitIncome(incomeData []*structs.StockIncome) (bool) {
 	firstYears, _ := strconv.Atoi(first.End_date)
 	firstYears = (firstYears / 100) % 100
 
-	if g.TsCode == "002736.SZ" {
-		fmt.Println("")
-	}
+	//if g.TsCode == "002736.SZ" {
+	//	fmt.Println("")
+	//}
 
 	if firstYears == 12 {
 		g.N_income_attr_ps[0] = first.N_income_attr_p

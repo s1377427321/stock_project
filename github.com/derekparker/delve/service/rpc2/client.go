@@ -3,6 +3,7 @@ package rpc2
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/rpc"
 	"net/rpc/jsonrpc"
 	"time"
@@ -13,8 +14,9 @@ import (
 
 // Client is a RPC service.Client.
 type RPCClient struct {
-	addr   string
 	client *rpc.Client
+
+	retValLoadCfg *api.LoadConfig
 }
 
 // Ensure the implementation satisfies the interface.
@@ -26,9 +28,18 @@ func NewClient(addr string) *RPCClient {
 	if err != nil {
 		log.Fatal("dialing:", err)
 	}
-	c := &RPCClient{addr: addr, client: client}
+	return newFromRPCClient(client)
+}
+
+func newFromRPCClient(client *rpc.Client) *RPCClient {
+	c := &RPCClient{client: client}
 	c.call("SetApiVersion", api.SetAPIVersionIn{2}, &api.SetAPIVersionOut{})
 	return c
+}
+
+// NewClientFromConn creates a new RPCClient from the given connection.
+func NewClientFromConn(conn net.Conn) *RPCClient {
+	return newFromRPCClient(jsonrpc.NewClient(conn))
 }
 
 func (c *RPCClient) ProcessPid() int {
@@ -67,6 +78,12 @@ func (c *RPCClient) GetState() (*api.DebuggerState, error) {
 	return out.State, err
 }
 
+func (c *RPCClient) GetStateNonBlocking() (*api.DebuggerState, error) {
+	var out StateOut
+	err := c.call("State", StateIn{NonBlocking: true}, &out)
+	return out.State, err
+}
+
 func (c *RPCClient) Continue() <-chan *api.DebuggerState {
 	return c.continueDir(api.Continue)
 }
@@ -80,7 +97,7 @@ func (c *RPCClient) continueDir(cmd string) <-chan *api.DebuggerState {
 	go func() {
 		for {
 			out := new(CommandOut)
-			err := c.call("Command", &api.DebuggerCommand{Name: cmd}, &out)
+			err := c.call("Command", &api.DebuggerCommand{Name: cmd, ReturnInfoLoadConfig: c.retValLoadCfg}, &out)
 			state := out.State
 			if err != nil {
 				state.Err = err
@@ -100,7 +117,7 @@ func (c *RPCClient) continueDir(cmd string) <-chan *api.DebuggerState {
 			for i := range state.Threads {
 				if state.Threads[i].Breakpoint != nil {
 					isbreakpoint = true
-					istracepoint = istracepoint && state.Threads[i].Breakpoint.Tracepoint
+					istracepoint = istracepoint && (state.Threads[i].Breakpoint.Tracepoint || state.Threads[i].Breakpoint.TraceReturn)
 				}
 			}
 
@@ -115,19 +132,25 @@ func (c *RPCClient) continueDir(cmd string) <-chan *api.DebuggerState {
 
 func (c *RPCClient) Next() (*api.DebuggerState, error) {
 	var out CommandOut
-	err := c.call("Command", api.DebuggerCommand{Name: api.Next}, &out)
+	err := c.call("Command", api.DebuggerCommand{Name: api.Next, ReturnInfoLoadConfig: c.retValLoadCfg}, &out)
 	return &out.State, err
 }
 
 func (c *RPCClient) Step() (*api.DebuggerState, error) {
 	var out CommandOut
-	err := c.call("Command", api.DebuggerCommand{Name: api.Step}, &out)
+	err := c.call("Command", api.DebuggerCommand{Name: api.Step, ReturnInfoLoadConfig: c.retValLoadCfg}, &out)
 	return &out.State, err
 }
 
 func (c *RPCClient) StepOut() (*api.DebuggerState, error) {
 	var out CommandOut
-	err := c.call("Command", &api.DebuggerCommand{Name: api.StepOut}, &out)
+	err := c.call("Command", &api.DebuggerCommand{Name: api.StepOut, ReturnInfoLoadConfig: c.retValLoadCfg}, &out)
+	return &out.State, err
+}
+
+func (c *RPCClient) Call(expr string, unsafe bool) (*api.DebuggerState, error) {
+	var out CommandOut
+	err := c.call("Command", &api.DebuggerCommand{Name: api.Call, ReturnInfoLoadConfig: c.retValLoadCfg, Expr: expr, UnsafeCall: unsafe}, &out)
 	return &out.State, err
 }
 
@@ -281,9 +304,9 @@ func (c *RPCClient) ListGoroutines() ([]*api.Goroutine, error) {
 	return out.Goroutines, err
 }
 
-func (c *RPCClient) Stacktrace(goroutineId, depth int, cfg *api.LoadConfig) ([]api.Stackframe, error) {
+func (c *RPCClient) Stacktrace(goroutineId, depth int, readDefers bool, cfg *api.LoadConfig) ([]api.Stackframe, error) {
 	var out StacktraceOut
-	err := c.call("Stacktrace", StacktraceIn{goroutineId, depth, false, cfg}, &out)
+	err := c.call("Stacktrace", StacktraceIn{goroutineId, depth, false, readDefers, cfg}, &out)
 	return out.Locations, err
 }
 
@@ -346,6 +369,30 @@ func (c *RPCClient) ClearCheckpoint(id int) error {
 	var out ClearCheckpointOut
 	err := c.call("ClearCheckpoint", ClearCheckpointIn{id}, &out)
 	return err
+}
+
+func (c *RPCClient) SetReturnValuesLoadConfig(cfg *api.LoadConfig) {
+	c.retValLoadCfg = cfg
+}
+
+func (c *RPCClient) FunctionReturnLocations(fnName string) ([]uint64, error) {
+	var out FunctionReturnLocationsOut
+	err := c.call("FunctionReturnLocations", FunctionReturnLocationsIn{fnName}, &out)
+	return out.Addrs, err
+}
+
+func (c *RPCClient) IsMulticlient() bool {
+	var out IsMulticlientOut
+	c.call("IsMulticlient", IsMulticlientIn{}, &out)
+	return out.IsMulticlient
+}
+
+func (c *RPCClient) Disconnect(cont bool) error {
+	if cont {
+		out := new(CommandOut)
+		c.client.Go("RPCServer.Command", &api.DebuggerCommand{Name: api.Continue, ReturnInfoLoadConfig: c.retValLoadCfg}, &out, nil)
+	}
+	return c.client.Close()
 }
 
 func (c *RPCClient) call(method string, args, reply interface{}) error {

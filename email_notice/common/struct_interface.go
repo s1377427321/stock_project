@@ -19,11 +19,16 @@ type StockInterface interface {
 	Start()
 }
 
+type Average struct {
+	Day5 float64
+}
+
 type Stock struct {
 	BuyMoney       float64
 	Code           string
 	Url            string
-	HeightPrice    float64
+	Name           string
+	HightPrice    float64
 	LowPrice       float64
 	mx             sync.Mutex
 	NoticeCallBack NoticeEmailCallBack
@@ -70,6 +75,18 @@ func (s *Stock) SendEmail(es *email.EmailServers, ec *email.EmailContent) {
 		s.CountOverTime = time.Now()
 	}
 	email.SendEmailTo(es, ec)
+	common.DingDingNotify1(ec.BodyContent)
+}
+
+func (s *Stock) SendToDingDing(content string) {
+	common.DingDingNotify1(content)
+}
+
+func (s *Stock) UpdatePrice(heigh, low float64) {
+	s.mx.Lock()
+	defer s.mx.Unlock()
+	s.HightPrice = heigh
+	s.LowPrice = low
 }
 
 func (s *Stock) UpdateCurrentPrice() (isSendEmail bool, emialContent string) {
@@ -87,19 +104,25 @@ func (s *Stock) UpdateCurrentPrice() (isSendEmail bool, emialContent string) {
 	}
 
 	strFormat := "%s current price : %v  and  height price：%v, low price：%v ,buy money:%v , buy copies:%v"
-	var content = fmt.Sprintf(strFormat, s.Code, currentPrice, s.HeightPrice, s.LowPrice, s.BuyMoney, 0)
+	var content = fmt.Sprintf(strFormat, s.Code, currentPrice, s.HightPrice, s.LowPrice, s.BuyMoney, 0)
 	fmt.Println(content)
 
-	if currentPrice >= s.HeightPrice {
-		bc := (int(s.BuyMoney/s.HeightPrice) / 100) * 100
-		var content = fmt.Sprintf(strFormat, s.Code, currentPrice, s.HeightPrice, s.LowPrice, s.BuyMoney, bc)
-		s.NoticeCallBack(s, content)
+	if currentPrice >= s.HightPrice {
+		bc := (int(s.BuyMoney/s.HightPrice) / 100) * 100
+		var content = fmt.Sprintf(strFormat, s.Code, currentPrice, s.HightPrice, s.LowPrice, s.BuyMoney, bc)
+		if s.NoticeCallBack != nil {
+			s.NoticeCallBack(s, content)
+		}
+		s.SendToDingDing(content)
 		return true, content
 
 	} else if currentPrice <= s.LowPrice {
 		bc := (int(s.BuyMoney/s.LowPrice) / 100) * 100
-		var content = fmt.Sprintf(strFormat, s.Code, currentPrice, s.HeightPrice, s.LowPrice, s.BuyMoney, bc)
-		s.NoticeCallBack(s, content)
+		var content = fmt.Sprintf(strFormat, s.Code, currentPrice, s.HightPrice, s.LowPrice, s.BuyMoney, bc)
+		if s.NoticeCallBack != nil {
+			s.NoticeCallBack(s, content)
+		}
+		s.SendToDingDing(content)
 		return true, content
 	}
 

@@ -11,7 +11,6 @@ import (
 	"common/email"
 )
 
-
 var emailUrl = "1377427321@qq.com"
 var emailServer = &email.EmailServers{
 	ServerEmail:    "1377427321@qq.com",
@@ -51,7 +50,7 @@ var configGoodComany GoodCompanyConfig = GoodCompanyConfig{
 	StartDay:                          "20100101",
 	EndDay:                            "Now",
 	YearNums:                          5,
-	DayNums:                           60,
+	DayNums:                           180,
 	ZuiDiDaoXianZaiShangZhangLvXiaoYu: 0.6,
 	ZuiGaoDaoXianZaiHuiTiaoLvDaYu:     0.1,
 	ZuiDaZhangFuLvXiaoYu:              0.9,
@@ -76,12 +75,44 @@ func (g *GoodCompanyManager) loop() {
 	//g.StartCalculate(stocks)
 	//g.SaveOneDayData()
 
-	//更新所有的股票当天价格,返回手上有的股票
-	stocks := UpdateDayTradeData()
-	g.StartCalculate(stocks)
-	g.SaveGoodCompanys2MySQL()
+	////更新所有的股票当天价格,返回手上有的股票
+	//stocks := UpdateDayTradeData()
+	//g.StartCalculate(stocks)
+	//g.SaveGoodCompanys2MySQL()
+	//
 
-	for range time.NewTicker(time.Hour * 2).C {
+
+	//for range time.NewTicker(time.Minute * 60).C {
+	//	hour := time.Now().Hour()
+	//	nowDay := time.Now().Format("20160101")
+	//	if hour >= 20 && g.SendEmailDay != nowDay {
+	//		g.SendEmailDay = nowDay
+	//
+	//		//更新所有的股票当天价格,返回手上有的股票
+	//		stocks := UpdateDayTradeData()
+	//		g.StartCalculate(stocks)
+	//		g.SaveGoodCompanys2MySQL()
+	//	} else {
+	//		stocks := g.GetGoodCompanys2MySQL()
+	//		g.StartCalculate(stocks)
+	//		g.SaveOneDayData()
+	//	}
+	//}
+
+	hour := time.Now().Hour()
+	nowDay := time.Now().Format("20160101")
+	if hour >= 20 && g.SendEmailDay != nowDay {
+		g.SendEmailDay = nowDay
+
+		//更新所有的股票当天价格,返回手上有的股票
+		stocks := UpdateDayTradeData()
+		g.StartCalculate(stocks)
+		g.SaveGoodCompanys2MySQL()
+		g.SaveOneDayData()
+	}
+
+
+	for range time.NewTicker(time.Minute * 40).C {
 		hour := time.Now().Hour()
 		nowDay := time.Now().Format("20160101")
 		if hour >= 20 && g.SendEmailDay != nowDay {
@@ -91,10 +122,8 @@ func (g *GoodCompanyManager) loop() {
 			stocks := UpdateDayTradeData()
 			g.StartCalculate(stocks)
 			g.SaveGoodCompanys2MySQL()
-		} else {
-			stocks := g.GetGoodCompanys2MySQL()
-			g.StartCalculate(stocks)
 			g.SaveOneDayData()
+
 		}
 	}
 }
@@ -147,7 +176,7 @@ func (g *GoodCompanyManager) StartCalculate(stocks []*structs.StockBasicInfo) {
 			fmt.Println(fmt.Sprintf("                 delete %s!", v.TsCode))
 			delete(g.Companys, v.TsCode)
 		} else {
-			fmt.Println("%s  is good company!", v.TsCode)
+			fmt.Println(v.Name, "  is good company!", v.TsCode)
 		}
 	}
 }
@@ -190,9 +219,6 @@ func (g *GoodCompanyManager) GetGoodCompanys2MySQL() []*structs.StockBasicInfo {
 	}
 	return sbi
 }
-
-
-
 
 //输出
 func (g *GoodCompanyManager) SaveOneDayData() {
@@ -268,10 +294,8 @@ func (g *GoodCompanyManager) SaveOneDayData() {
 
 	}
 
-
-
-	timeN := time.Now().Format("20060102")
-	fileName :=fmt.Sprintf("GOOD_COMPANY_%s.txt", timeN)
+	timeN := time.Now().Format("200601021526")
+	fileName := fmt.Sprintf("GOOD_COMPANY_%s.txt", timeN)
 	commons.WriteWithIoutil(fileName, saveDes)
 
 	ec := &email.EmailContent{
@@ -282,5 +306,6 @@ func (g *GoodCompanyManager) SaveOneDayData() {
 	}
 
 	email.SendEmailTo(emailServer, ec)
-}
 
+	commons.DingDingNotify1(saveDes)
+}

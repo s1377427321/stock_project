@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/derekparker/delve/pkg/dwarf/godwarf"
 	"github.com/pkg/profile"
 )
 
@@ -34,43 +35,46 @@ func grabDebugLineSection(p string, t *testing.T) []byte {
 
 	ef, err := elf.NewFile(f)
 	if err == nil {
-		data, _ := ef.Section(".debug_line").Data()
+		data, _ := godwarf.GetDebugSectionElf(ef, "line")
 		return data
 	}
 
 	pf, err := pe.NewFile(f)
 	if err == nil {
-		sec := pf.Section(".debug_line")
-		data, _ := sec.Data()
-		if 0 < sec.VirtualSize && sec.VirtualSize < sec.Size {
-			return data[:sec.VirtualSize]
-		}
+		data, _ := godwarf.GetDebugSectionPE(pf, "line")
 		return data
 	}
 
-	mf, _ := macho.NewFile(f)
-	data, _ := mf.Section("__debug_line").Data()
+	mf, err := macho.NewFile(f)
+	if err == nil {
+		data, _ := godwarf.GetDebugSectionMacho(mf, "line")
+		return data
+	}
 
-	return data
+	return nil
 }
 
 const (
-	lineBaseGo14  int8  = -1
-	lineBaseGo18  int8  = -4
-	lineRangeGo14 uint8 = 4
-	lineRangeGo18 uint8 = 10
+	lineBaseGo14    int8   = -1
+	lineBaseGo18    int8   = -4
+	lineRangeGo14   uint8  = 4
+	lineRangeGo18   uint8  = 10
+	versionGo14     uint16 = 2
+	versionGo111    uint16 = 3
+	opcodeBaseGo14  uint8  = 10
+	opcodeBaseGo111 uint8  = 11
 )
 
 func testDebugLinePrologueParser(p string, t *testing.T) {
 	data := grabDebugLineSection(p, t)
-	debugLines := ParseAll(data)
+	debugLines := ParseAll(data, nil, 0)
 
 	mainFileFound := false
 
 	for _, dbl := range debugLines {
 		prologue := dbl.Prologue
 
-		if prologue.Version != uint16(2) {
+		if prologue.Version != versionGo14 && prologue.Version != versionGo111 {
 			t.Fatal("Version not parsed correctly", prologue.Version)
 		}
 
@@ -94,11 +98,11 @@ func testDebugLinePrologueParser(p string, t *testing.T) {
 			t.Fatal("Line Range not parsed correctly", prologue.LineRange)
 		}
 
-		if prologue.OpcodeBase != uint8(10) {
+		if prologue.OpcodeBase != opcodeBaseGo14 && prologue.OpcodeBase != opcodeBaseGo111 {
 			t.Fatal("Opcode Base not parsed correctly", prologue.OpcodeBase)
 		}
 
-		lengths := []uint8{0, 1, 1, 1, 1, 0, 0, 0, 1}
+		lengths := []uint8{0, 1, 1, 1, 1, 0, 0, 0, 1, 0}
 		for i, l := range prologue.StdOpLengths {
 			if l != lengths[i] {
 				t.Fatal("Length not parsed correctly", l)
@@ -160,7 +164,7 @@ func BenchmarkLineParser(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = ParseAll(data)
+		_ = ParseAll(data, nil, 0)
 	}
 }
 
@@ -175,7 +179,7 @@ func loadBenchmarkData(tb testing.TB) DebugLines {
 		tb.Fatal("Could not read test data", err)
 	}
 
-	return ParseAll(data)
+	return ParseAll(data, nil, 0)
 }
 
 func BenchmarkStateMachine(b *testing.B) {

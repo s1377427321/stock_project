@@ -30,7 +30,8 @@ type Breakpoint struct {
 	Kind BreakpointKind
 
 	// Breakpoint information
-	Tracepoint    bool     // Tracepoint flag
+	Tracepoint    bool // Tracepoint flag
+	TraceReturn   bool
 	Goroutine     bool     // Retrieve goroutine information
 	Stacktrace    int      // Number of stack frames to retrieve
 	Variables     []string // Variables to evaluate
@@ -45,7 +46,7 @@ type Breakpoint struct {
 	// Next uses NextDeferBreakpoints for the breakpoint it sets on the
 	// deferred function, DeferReturns is populated with the
 	// addresses of calls to runtime.deferreturn in the current
-	// function. This insures that the breakpoint on the deferred
+	// function. This ensures that the breakpoint on the deferred
 	// function only triggers on panic or on the defer call to
 	// the function, not when the function is called directly
 	DeferReturns []uint64
@@ -53,9 +54,13 @@ type Breakpoint struct {
 	Cond ast.Expr
 	// internalCond is the same as Cond but used for the condition of internal breakpoints
 	internalCond ast.Expr
+
+	// ReturnInfo describes how to collect return variables when this
+	// breakpoint is hit as a return breakpoint.
+	returnInfo *returnBreakpointInfo
 }
 
-// Breakpoint Kind determines the behavior of delve when the
+// BreakpointKind determines the behavior of delve when the
 // breakpoint is reached.
 type BreakpointKind uint16
 
@@ -102,12 +107,19 @@ func (iae InvalidAddressError) Error() string {
 	return fmt.Sprintf("Invalid address %#v\n", iae.Address)
 }
 
+type returnBreakpointInfo struct {
+	retFrameCond ast.Expr
+	fn           *Function
+	frameOffset  int64
+	spOffset     int64
+}
+
 // CheckCondition evaluates bp's condition on thread.
 func (bp *Breakpoint) CheckCondition(thread Thread) BreakpointState {
 	bpstate := BreakpointState{Breakpoint: bp, Active: false, Internal: false, CondError: nil}
 	if bp.Cond == nil && bp.internalCond == nil {
 		bpstate.Active = true
-		bpstate.Internal = bp.Kind != UserBreakpoint
+		bpstate.Internal = bp.IsInternal()
 		return bpstate
 	}
 	nextDeferOk := true
@@ -127,7 +139,7 @@ func (bp *Breakpoint) CheckCondition(thread Thread) BreakpointState {
 			nextDeferOk = ispanic || isdeferreturn
 		}
 	}
-	if bp.Kind != UserBreakpoint {
+	if bp.IsInternal() {
 		// Check internalCondition if this is also an internal breakpoint
 		bpstate.Active, bpstate.CondError = evalBreakpointCondition(thread, bp.internalCond)
 		bpstate.Active = bpstate.Active && nextDeferOk
@@ -136,7 +148,7 @@ func (bp *Breakpoint) CheckCondition(thread Thread) BreakpointState {
 			return bpstate
 		}
 	}
-	if bp.Kind&UserBreakpoint != 0 {
+	if bp.IsUser() {
 		// Check normal condition if this is also a user breakpoint
 		bpstate.Active, bpstate.CondError = evalBreakpointCondition(thread, bp.Cond)
 	}
@@ -169,11 +181,12 @@ func evalBreakpointCondition(thread Thread, cond ast.Expr) (bool, error) {
 	if err != nil {
 		return true, fmt.Errorf("error evaluating expression: %v", err)
 	}
-	if v.Unreadable != nil {
-		return true, fmt.Errorf("condition expression unreadable: %v", v.Unreadable)
-	}
 	if v.Kind != reflect.Bool {
 		return true, errors.New("condition expression not boolean")
+	}
+	v.loadValue(loadFullValue)
+	if v.Unreadable != nil {
+		return true, fmt.Errorf("condition expression unreadable: %v", v.Unreadable)
 	}
 	return constant.BoolVal(v.Value), nil
 }
@@ -219,7 +232,7 @@ func (bpmap *BreakpointMap) Set(addr uint64, kind BreakpointKind, cond ast.Expr,
 		// We can overlap one internal breakpoint with one user breakpoint, we
 		// need to support this otherwise a conditional breakpoint can mask a
 		// breakpoint set by next or step.
-		if (kind != UserBreakpoint && bp.Kind != UserBreakpoint) || (kind == UserBreakpoint && bp.Kind&UserBreakpoint != 0) {
+		if (kind != UserBreakpoint && bp.Kind != UserBreakpoint) || (kind == UserBreakpoint && bp.IsUser()) {
 			return bp, BreakpointExistsError{bp.File, bp.Line, bp.Addr}
 		}
 		bp.Kind |= kind
@@ -302,6 +315,7 @@ func (bpmap *BreakpointMap) ClearInternalBreakpoints(clearBreakpoint clearBreakp
 	for addr, bp := range bpmap.M {
 		bp.Kind = bp.Kind & UserBreakpoint
 		bp.internalCond = nil
+		bp.returnInfo = nil
 		if bp.Kind != 0 {
 			continue
 		}
@@ -317,7 +331,7 @@ func (bpmap *BreakpointMap) ClearInternalBreakpoints(clearBreakpoint clearBreakp
 // breakpoint set.
 func (bpmap *BreakpointMap) HasInternalBreakpoints() bool {
 	for _, bp := range bpmap.M {
-		if bp.Kind != UserBreakpoint {
+		if bp.IsInternal() {
 			return true
 		}
 	}
@@ -337,6 +351,7 @@ type BreakpointState struct {
 	CondError error
 }
 
+// Clear zeros the struct.
 func (bpstate *BreakpointState) Clear() {
 	bpstate.Breakpoint = nil
 	bpstate.Active = false
@@ -353,4 +368,71 @@ func (bpstate *BreakpointState) String() string {
 		s += " internal"
 	}
 	return s
+}
+
+func configureReturnBreakpoint(bi *BinaryInfo, bp *Breakpoint, topframe *Stackframe, retFrameCond ast.Expr) {
+	if topframe.Current.Fn == nil {
+		return
+	}
+	bp.returnInfo = &returnBreakpointInfo{
+		retFrameCond: retFrameCond,
+		fn:           topframe.Current.Fn,
+		frameOffset:  topframe.FrameOffset(),
+		spOffset:     topframe.FrameOffset() - int64(bi.Arch.PtrSize()), // must be the value that SP had at the entry point of the function
+	}
+}
+
+func (rbpi *returnBreakpointInfo) Collect(thread Thread) []*Variable {
+	if rbpi == nil {
+		return nil
+	}
+
+	g, err := GetG(thread)
+	if err != nil {
+		return returnInfoError("could not get g", err, thread)
+	}
+	scope, err := GoroutineScope(thread)
+	if err != nil {
+		return returnInfoError("could not get scope", err, thread)
+	}
+	v, err := scope.evalAST(rbpi.retFrameCond)
+	if err != nil || v.Unreadable != nil || v.Kind != reflect.Bool {
+		// This condition was evaluated as part of the breakpoint condition
+		// evaluation, if the errors happen they will be reported as part of the
+		// condition errors.
+		return nil
+	}
+	if !constant.BoolVal(v.Value) {
+		// Breakpoint not hit as a return breakpoint.
+		return nil
+	}
+
+	oldFrameOffset := rbpi.frameOffset + int64(g.stackhi)
+	oldSP := uint64(rbpi.spOffset + int64(g.stackhi))
+	err = fakeFunctionEntryScope(scope, rbpi.fn, oldFrameOffset, oldSP)
+	if err != nil {
+		return returnInfoError("could not read function entry", err, thread)
+	}
+
+	vars, err := scope.Locals()
+	if err != nil {
+		return returnInfoError("could not evaluate return variables", err, thread)
+	}
+	vars = filterVariables(vars, func(v *Variable) bool {
+		return (v.Flags & VariableReturnArgument) != 0
+	})
+
+	// Go saves the return variables in the opposite order that the user
+	// specifies them so here we reverse the slice to make it easier to
+	// understand.
+	for i := 0; i < len(vars)/2; i++ {
+		vars[i], vars[len(vars)-i-1] = vars[len(vars)-i-1], vars[i]
+	}
+	return vars
+}
+
+func returnInfoError(descr string, err error, mem MemoryReadWriter) []*Variable {
+	v := newConstant(constant.MakeString(fmt.Sprintf("%s: %v", descr, err.Error())), mem)
+	v.Name = "return value read error"
+	return []*Variable{v}
 }

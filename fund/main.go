@@ -1,8 +1,7 @@
 package main
 
 import (
-	_ "github.com/go-sql-driver/mysql"
-		"fund/common/good_company"
+	"fund/common/good_company"
 	"time"
 )
 
@@ -13,9 +12,23 @@ func main() {
 
 	gm.Start()
 
+
 	for range time.NewTicker(time.Hour*10).C{
 	}
+
+	//common.GetDealBuyStaticsInfos()
 }
+
+//func main()  {
+//	canTime, _ := time.Parse("200601021504", "201804181742")
+//	canTimems := canTime.UnixNano() / int64(time.Millisecond) / 1000
+//	create:=int64(1552118425)
+//	if create < canTimems {
+//		logs.Info("aaaaa")
+//	}
+//	logs.Info("bbbbbbbbbbbbbb")
+//
+//}
 
 //
 //func main() {

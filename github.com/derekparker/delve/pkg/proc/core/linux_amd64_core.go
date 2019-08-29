@@ -4,47 +4,13 @@ import (
 	"bytes"
 	"debug/elf"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 
-	"golang.org/x/arch/x86/x86asm"
-
 	"github.com/derekparker/delve/pkg/proc"
+	"github.com/derekparker/delve/pkg/proc/linutil"
 )
-
-// Copied from golang.org/x/sys/unix.PtraceRegs since it's not available on
-// all systems.
-type LinuxCoreRegisters struct {
-	R15      uint64
-	R14      uint64
-	R13      uint64
-	R12      uint64
-	Rbp      uint64
-	Rbx      uint64
-	R11      uint64
-	R10      uint64
-	R9       uint64
-	R8       uint64
-	Rax      uint64
-	Rcx      uint64
-	Rdx      uint64
-	Rsi      uint64
-	Rdi      uint64
-	Orig_rax uint64
-	Rip      uint64
-	Cs       uint64
-	Eflags   uint64
-	Rsp      uint64
-	Ss       uint64
-	Fs_base  uint64
-	Gs_base  uint64
-	Ds       uint64
-	Es       uint64
-	Fs       uint64
-	Gs       uint64
-}
 
 // Copied from golang.org/x/sys/unix.Timeval since it's not available on all
 // systems.
@@ -53,201 +19,22 @@ type LinuxCoreTimeval struct {
 	Usec int64
 }
 
-const NT_FILE elf.NType = 0x46494c45  // "FILE".
+// NT_FILE is file mapping information, e.g. program text mappings. Desc is a LinuxNTFile.
+const NT_FILE elf.NType = 0x46494c45 // "FILE".
+
+// NT_X86_XSTATE is other registers, including AVX and such.
 const NT_X86_XSTATE elf.NType = 0x202 // Note type for notes containing X86 XSAVE area.
 
-func (r *LinuxCoreRegisters) PC() uint64 {
-	return r.Rip
-}
+// NT_AUXV is the note type for notes containing a copy of the Auxv array
+const NT_AUXV elf.NType = 0x6
 
-func (r *LinuxCoreRegisters) SP() uint64 {
-	return r.Rsp
-}
-
-func (r *LinuxCoreRegisters) BP() uint64 {
-	return r.Rbp
-}
-
-func (r *LinuxCoreRegisters) CX() uint64 {
-	return r.Rcx
-}
-
-func (r *LinuxCoreRegisters) TLS() uint64 {
-	return r.Fs_base
-}
-
-func (r *LinuxCoreRegisters) GAddr() (uint64, bool) {
-	return 0, false
-}
-
-func (r *LinuxCoreRegisters) Get(n int) (uint64, error) {
-	reg := x86asm.Reg(n)
-	const (
-		mask8  = 0x000f
-		mask16 = 0x00ff
-		mask32 = 0xffff
-	)
-
-	switch reg {
-	// 8-bit
-	case x86asm.AL:
-		return r.Rax & mask8, nil
-	case x86asm.CL:
-		return r.Rcx & mask8, nil
-	case x86asm.DL:
-		return r.Rdx & mask8, nil
-	case x86asm.BL:
-		return r.Rbx & mask8, nil
-	case x86asm.AH:
-		return (r.Rax >> 8) & mask8, nil
-	case x86asm.CH:
-		return (r.Rcx >> 8) & mask8, nil
-	case x86asm.DH:
-		return (r.Rdx >> 8) & mask8, nil
-	case x86asm.BH:
-		return (r.Rbx >> 8) & mask8, nil
-	case x86asm.SPB:
-		return r.Rsp & mask8, nil
-	case x86asm.BPB:
-		return r.Rbp & mask8, nil
-	case x86asm.SIB:
-		return r.Rsi & mask8, nil
-	case x86asm.DIB:
-		return r.Rdi & mask8, nil
-	case x86asm.R8B:
-		return r.R8 & mask8, nil
-	case x86asm.R9B:
-		return r.R9 & mask8, nil
-	case x86asm.R10B:
-		return r.R10 & mask8, nil
-	case x86asm.R11B:
-		return r.R11 & mask8, nil
-	case x86asm.R12B:
-		return r.R12 & mask8, nil
-	case x86asm.R13B:
-		return r.R13 & mask8, nil
-	case x86asm.R14B:
-		return r.R14 & mask8, nil
-	case x86asm.R15B:
-		return r.R15 & mask8, nil
-
-	// 16-bit
-	case x86asm.AX:
-		return r.Rax & mask16, nil
-	case x86asm.CX:
-		return r.Rcx & mask16, nil
-	case x86asm.DX:
-		return r.Rdx & mask16, nil
-	case x86asm.BX:
-		return r.Rbx & mask16, nil
-	case x86asm.SP:
-		return r.Rsp & mask16, nil
-	case x86asm.BP:
-		return r.Rbp & mask16, nil
-	case x86asm.SI:
-		return r.Rsi & mask16, nil
-	case x86asm.DI:
-		return r.Rdi & mask16, nil
-	case x86asm.R8W:
-		return r.R8 & mask16, nil
-	case x86asm.R9W:
-		return r.R9 & mask16, nil
-	case x86asm.R10W:
-		return r.R10 & mask16, nil
-	case x86asm.R11W:
-		return r.R11 & mask16, nil
-	case x86asm.R12W:
-		return r.R12 & mask16, nil
-	case x86asm.R13W:
-		return r.R13 & mask16, nil
-	case x86asm.R14W:
-		return r.R14 & mask16, nil
-	case x86asm.R15W:
-		return r.R15 & mask16, nil
-
-	// 32-bit
-	case x86asm.EAX:
-		return r.Rax & mask32, nil
-	case x86asm.ECX:
-		return r.Rcx & mask32, nil
-	case x86asm.EDX:
-		return r.Rdx & mask32, nil
-	case x86asm.EBX:
-		return r.Rbx & mask32, nil
-	case x86asm.ESP:
-		return r.Rsp & mask32, nil
-	case x86asm.EBP:
-		return r.Rbp & mask32, nil
-	case x86asm.ESI:
-		return r.Rsi & mask32, nil
-	case x86asm.EDI:
-		return r.Rdi & mask32, nil
-	case x86asm.R8L:
-		return r.R8 & mask32, nil
-	case x86asm.R9L:
-		return r.R9 & mask32, nil
-	case x86asm.R10L:
-		return r.R10 & mask32, nil
-	case x86asm.R11L:
-		return r.R11 & mask32, nil
-	case x86asm.R12L:
-		return r.R12 & mask32, nil
-	case x86asm.R13L:
-		return r.R13 & mask32, nil
-	case x86asm.R14L:
-		return r.R14 & mask32, nil
-	case x86asm.R15L:
-		return r.R15 & mask32, nil
-
-	// 64-bit
-	case x86asm.RAX:
-		return r.Rax, nil
-	case x86asm.RCX:
-		return r.Rcx, nil
-	case x86asm.RDX:
-		return r.Rdx, nil
-	case x86asm.RBX:
-		return r.Rbx, nil
-	case x86asm.RSP:
-		return r.Rsp, nil
-	case x86asm.RBP:
-		return r.Rbp, nil
-	case x86asm.RSI:
-		return r.Rsi, nil
-	case x86asm.RDI:
-		return r.Rdi, nil
-	case x86asm.R8:
-		return r.R8, nil
-	case x86asm.R9:
-		return r.R9, nil
-	case x86asm.R10:
-		return r.R10, nil
-	case x86asm.R11:
-		return r.R11, nil
-	case x86asm.R12:
-		return r.R12, nil
-	case x86asm.R13:
-		return r.R13, nil
-	case x86asm.R14:
-		return r.R14, nil
-	case x86asm.R15:
-		return r.R15, nil
-	}
-
-	return 0, proc.UnknownRegisterError
-}
-
-func (r *LinuxCoreRegisters) SetPC(proc.Thread, uint64) error {
-	return errors.New("not supported")
-}
-
-// readCore reads a core file from corePath corresponding to the executable at
+// readLinuxAMD64Core reads a core file from corePath corresponding to the executable at
 // exePath. For details on the Linux ELF core format, see:
 // http://www.gabriel.urdhr.fr/2015/05/29/core-file/,
 // http://uhlo.blogspot.fr/2012/05/brief-look-into-core-dumps.html,
 // elf_core_dump in http://lxr.free-electrons.com/source/fs/binfmt_elf.c,
 // and, if absolutely desperate, readelf.c from the binutils source.
-func readCore(corePath, exePath string) (*Core, error) {
+func readLinuxAMD64Core(corePath, exePath string) (*Process, error) {
 	coreFile, err := elf.Open(corePath)
 	if err != nil {
 		return nil, err
@@ -256,44 +43,70 @@ func readCore(corePath, exePath string) (*Core, error) {
 	if err != nil {
 		return nil, err
 	}
+	exeELF, err := elf.NewFile(exe)
+	if err != nil {
+		return nil, err
+	}
 
 	if coreFile.Type != elf.ET_CORE {
 		return nil, fmt.Errorf("%v is not a core file", coreFile)
+	}
+	if exeELF.Type != elf.ET_EXEC && exeELF.Type != elf.ET_DYN {
+		return nil, fmt.Errorf("%v is not an exe file", exeELF)
 	}
 
 	notes, err := readNotes(coreFile)
 	if err != nil {
 		return nil, err
 	}
-	memory := buildMemory(coreFile, exe, notes)
+	memory := buildMemory(coreFile, exeELF, exe, notes)
+	entryPoint := findEntryPoint(notes)
 
-	core := &Core{
-		MemoryReader: memory,
-		Threads:      map[int]*Thread{},
+	p := &Process{
+		mem:         memory,
+		Threads:     map[int]*Thread{},
+		entryPoint:  entryPoint,
+		bi:          proc.NewBinaryInfo("linux", "amd64"),
+		breakpoints: proc.NewBreakpointMap(),
 	}
 
-	var lastThread *Thread
+	var lastThread *linuxAMD64Thread
 	for _, note := range notes {
 		switch note.Type {
 		case elf.NT_PRSTATUS:
 			t := note.Desc.(*LinuxPrStatus)
-			lastThread = &Thread{t, nil, nil}
-			core.Threads[int(t.Pid)] = lastThread
+			lastThread = &linuxAMD64Thread{linutil.AMD64Registers{Regs: &t.Reg}, t}
+			p.Threads[int(t.Pid)] = &Thread{lastThread, p, proc.CommonThread{}}
+			if p.currentThread == nil {
+				p.currentThread = p.Threads[int(t.Pid)]
+			}
 		case NT_X86_XSTATE:
 			if lastThread != nil {
-				lastThread.fpregs = note.Desc.(*proc.LinuxX86Xstate).Decode()
+				lastThread.regs.Fpregs = note.Desc.(*linutil.AMD64Xstate).Decode()
 			}
 		case elf.NT_PRPSINFO:
-			core.Pid = int(note.Desc.(*LinuxPrPsInfo).Pid)
+			p.pid = int(note.Desc.(*LinuxPrPsInfo).Pid)
 		}
 	}
-	return core, nil
+	return p, nil
 }
 
-type Core struct {
-	proc.MemoryReader
-	Threads map[int]*Thread
-	Pid     int
+type linuxAMD64Thread struct {
+	regs linutil.AMD64Registers
+	t    *LinuxPrStatus
+}
+
+func (t *linuxAMD64Thread) registers(floatingPoint bool) (proc.Registers, error) {
+	var r linutil.AMD64Registers
+	r.Regs = t.regs.Regs
+	if floatingPoint {
+		r.Fpregs = t.regs.Fpregs
+	}
+	return &r, nil
+}
+
+func (t *linuxAMD64Thread) pid() int {
+	return int(t.t.Pid)
 }
 
 // Note is a note from the PT_NOTE prog.
@@ -384,17 +197,19 @@ func readNote(r io.ReadSeeker) (*Note, error) {
 		for i := 0; i < int(data.Count); i++ {
 			entry := &LinuxNTFileEntry{}
 			if err := binary.Read(descReader, binary.LittleEndian, entry); err != nil {
-				return nil, fmt.Errorf("reading NT_PRPSINFO entry %v: %v", i, err)
+				return nil, fmt.Errorf("reading NT_FILE entry %v: %v", i, err)
 			}
 			data.entries = append(data.entries, entry)
 		}
 		note.Desc = data
 	case NT_X86_XSTATE:
-		var fpregs proc.LinuxX86Xstate
-		if err := proc.LinuxX86XstateRead(desc, true, &fpregs); err != nil {
+		var fpregs linutil.AMD64Xstate
+		if err := linutil.AMD64XstateRead(desc, true, &fpregs); err != nil {
 			return nil, err
 		}
 		note.Desc = &fpregs
+	case NT_AUXV:
+		note.Desc = desc
 	}
 	if err := skipPadding(r, 4); err != nil {
 		return nil, fmt.Errorf("aligning after desc: %v", err)
@@ -417,7 +232,7 @@ func skipPadding(r io.ReadSeeker, pad int64) error {
 	return nil
 }
 
-func buildMemory(core *elf.File, exe io.ReaderAt, notes []*Note) proc.MemoryReader {
+func buildMemory(core, exeELF *elf.File, exe io.ReaderAt, notes []*Note) proc.MemoryReader {
 	memory := &SplicedMemory{}
 
 	// For now, assume all file mappings are to the exe.
@@ -434,22 +249,36 @@ func buildMemory(core *elf.File, exe io.ReaderAt, notes []*Note) proc.MemoryRead
 
 		}
 	}
-	for _, prog := range core.Progs {
-		if prog.Type == elf.PT_LOAD {
-			if prog.Filesz == 0 {
-				continue
+
+	// Load memory segments from exe and then from the core file,
+	// allowing the corefile to overwrite previously loaded segments
+	for _, elfFile := range []*elf.File{exeELF, core} {
+		for _, prog := range elfFile.Progs {
+			if prog.Type == elf.PT_LOAD {
+				if prog.Filesz == 0 {
+					continue
+				}
+				r := &OffsetReaderAt{
+					reader: prog.ReaderAt,
+					offset: uintptr(prog.Vaddr),
+				}
+				memory.Add(r, uintptr(prog.Vaddr), uintptr(prog.Filesz))
 			}
-			r := &OffsetReaderAt{
-				reader: prog.ReaderAt,
-				offset: uintptr(prog.Vaddr),
-			}
-			memory.Add(r, uintptr(prog.Vaddr), uintptr(prog.Filesz))
 		}
 	}
 	return memory
 }
 
-// Various structures from the ELF spec and the Linux kernel.
+func findEntryPoint(notes []*Note) uint64 {
+	for _, note := range notes {
+		if note.Type == NT_AUXV {
+			return linutil.EntryPointFromAuxvAMD64(note.Desc.([]byte))
+		}
+	}
+	return 0
+}
+
+// LinuxPrPsInfo has various structures from the ELF spec and the Linux kernel.
 // AMD64 specific primarily because of unix.PtraceRegs, but also
 // because some of the fields are word sized.
 // See http://lxr.free-electrons.com/source/include/uapi/linux/elfcore.h
@@ -466,6 +295,7 @@ type LinuxPrPsInfo struct {
 	Args                 [80]uint8
 }
 
+// LinuxPrStatus is a copy of the prstatus kernel struct.
 type LinuxPrStatus struct {
 	Siginfo                      LinuxSiginfo
 	Cursig                       uint16
@@ -474,33 +304,39 @@ type LinuxPrStatus struct {
 	Sighold                      uint64
 	Pid, Ppid, Pgrp, Sid         int32
 	Utime, Stime, CUtime, CStime LinuxCoreTimeval
-	Reg                          LinuxCoreRegisters
+	Reg                          linutil.AMD64PtraceRegs
 	Fpvalid                      int32
 }
 
+// LinuxSiginfo is a copy of the
+// siginfo kernel struct.
 type LinuxSiginfo struct {
 	Signo int32
 	Code  int32
 	Errno int32
 }
 
+// LinuxNTFile contains information on mapped files.
 type LinuxNTFile struct {
 	LinuxNTFileHdr
 	entries []*LinuxNTFileEntry
 }
 
+// LinuxNTFileHdr is a header struct for NTFile.
 type LinuxNTFileHdr struct {
 	Count    uint64
 	PageSize uint64
 }
 
+// LinuxNTFileEntry is an entry of an NT_FILE note.
 type LinuxNTFileEntry struct {
 	Start   uint64
 	End     uint64
 	FileOfs uint64
 }
 
-// ELF Notes header. Same size on 64 and 32-bit machines.
+// ELFNotesHdr is the ELF Notes header.
+// Same size on 64 and 32-bit machines.
 type ELFNotesHdr struct {
 	Namesz uint32
 	Descsz uint32

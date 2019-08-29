@@ -25,6 +25,7 @@ const (
 	AttrGoKey           dwarf.Attr = 0x2901
 	AttrGoElem          dwarf.Attr = 0x2902
 	AttrGoEmbeddedField dwarf.Attr = 0x2903
+	AttrGoRuntimeType   dwarf.Attr = 0x2904
 )
 
 // Basic type encodings -- the value for AttrEncoding in a TagBaseType Entry.
@@ -848,6 +849,9 @@ func readType(d *dwarf.Data, name string, r *dwarf.Reader, off dwarf.Offset, typ
 				b = t.Type.Size()
 			case *PtrType:
 				b = int64(addressSize)
+			case *FuncType:
+				// on Go < 1.10 function types do not have a DW_AT_byte_size attribute.
+				b = int64(addressSize)
 			}
 		}
 		typ.Common().ByteSize = b
@@ -870,5 +874,15 @@ func zeroArray(t Type) {
 		}
 		at.Count = 0
 		t = at.Type
+	}
+}
+
+func resolveTypedef(typ Type) Type {
+	for {
+		if tt, ok := typ.(*TypedefType); ok {
+			typ = tt.Type
+		} else {
+			return typ
+		}
 	}
 }

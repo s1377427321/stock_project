@@ -2,7 +2,6 @@ package proc
 
 import (
 	"bytes"
-	"debug/dwarf"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -12,12 +11,15 @@ import (
 	"go/printer"
 	"go/token"
 	"reflect"
+	"strconv"
+	"strings"
 
 	"github.com/derekparker/delve/pkg/dwarf/godwarf"
 	"github.com/derekparker/delve/pkg/dwarf/reader"
+	"github.com/derekparker/delve/pkg/goversion"
 )
 
-var OperationOnSpecialFloatError = errors.New("operations on non-finite floats not implemented")
+var errOperationOnSpecialFloat = errors.New("operations on non-finite floats not implemented")
 
 // EvalExpression returns the value of the given expression.
 func (scope *EvalScope) EvalExpression(expr string, cfg LoadConfig) (*Variable, error) {
@@ -111,37 +113,57 @@ func (scope *EvalScope) evalToplevelTypeCast(t ast.Expr, cfg LoadConfig) (*Varia
 		return v, nil
 
 	case "string":
-		if argv.Kind != reflect.Slice {
-			return nil, nil
-		}
-		switch elemType := argv.RealType.(*godwarf.SliceType).ElemType.(type) {
-		case *godwarf.UintType:
-			if elemType.Name != "uint8" && elemType.Name != "byte" {
-				return nil, nil
+		switch argv.Kind {
+		case reflect.String:
+			s := constant.StringVal(argv.Value)
+			v.Value = constant.MakeString(s)
+			v.Len = int64(len(s))
+			return v, nil
+		case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Int, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uint, reflect.Uintptr:
+			b, _ := constant.Int64Val(argv.Value)
+			s := string(b)
+			v.Value = constant.MakeString(s)
+			v.Len = int64(len(s))
+			return v, nil
+		case reflect.Slice, reflect.Array:
+			var elem godwarf.Type
+			if argv.Kind == reflect.Slice {
+				elem = argv.RealType.(*godwarf.SliceType).ElemType
+			} else {
+				elem = argv.RealType.(*godwarf.ArrayType).Type
 			}
-			bytes := make([]byte, len(argv.Children))
-			for i := range argv.Children {
-				n, _ := constant.Int64Val(argv.Children[i].Value)
-				bytes[i] = byte(n)
-			}
-			v.Value = constant.MakeString(string(bytes))
+			switch elemType := elem.(type) {
+			case *godwarf.UintType:
+				if elemType.Name != "uint8" && elemType.Name != "byte" {
+					return nil, nil
+				}
+				bytes := make([]byte, len(argv.Children))
+				for i := range argv.Children {
+					n, _ := constant.Int64Val(argv.Children[i].Value)
+					bytes[i] = byte(n)
+				}
+				v.Value = constant.MakeString(string(bytes))
 
-		case *godwarf.IntType:
-			if elemType.Name != "int32" && elemType.Name != "rune" {
+			case *godwarf.IntType:
+				if elemType.Name != "int32" && elemType.Name != "rune" {
+					return nil, nil
+				}
+				runes := make([]rune, len(argv.Children))
+				for i := range argv.Children {
+					n, _ := constant.Int64Val(argv.Children[i].Value)
+					runes[i] = rune(n)
+				}
+				v.Value = constant.MakeString(string(runes))
+
+			default:
 				return nil, nil
 			}
-			runes := make([]rune, len(argv.Children))
-			for i := range argv.Children {
-				n, _ := constant.Int64Val(argv.Children[i].Value)
-				runes[i] = rune(n)
-			}
-			v.Value = constant.MakeString(string(runes))
+			v.Len = int64(len(constant.StringVal(v.Value)))
+			return v, nil
 
 		default:
 			return nil, nil
 		}
-		v.Len = int64(len(constant.StringVal(v.Value)))
-		return v, nil
 	}
 
 	return nil, nil
@@ -186,6 +208,15 @@ func (scope *EvalScope) evalAST(t ast.Expr) (*Variable, error) {
 				return newConstant(constant.MakeInt64(scope.frameOffset), scope.Mem), nil
 			} else if v, err := scope.findGlobal(maybePkg.Name + "." + node.Sel.Name); err == nil {
 				return v, nil
+			}
+		}
+		// try to accept "package/path".varname syntax for package variables
+		if maybePkg, ok := node.X.(*ast.BasicLit); ok && maybePkg.Kind == token.STRING {
+			pkgpath, err := strconv.Unquote(maybePkg.Value)
+			if err == nil {
+				if v, err := scope.findGlobal(pkgpath + "." + node.Sel.Name); err == nil {
+					return v, nil
+				}
 			}
 		}
 		// if it's not a package variable then it must be a struct member access
@@ -564,22 +595,13 @@ func (scope *EvalScope) evalIdent(node *ast.Ident) (*Variable, error) {
 		return nilVariable, nil
 	}
 
-	vars, err := scope.variablesByTag(dwarf.TagVariable, nil)
+	vars, err := scope.Locals()
 	if err != nil {
 		return nil, err
 	}
 	for i := range vars {
 		if vars[i].Name == node.Name && vars[i].Flags&VariableShadowed == 0 {
 			return vars[i], nil
-		}
-	}
-	args, err := scope.variablesByTag(dwarf.TagFormalParameter, nil)
-	if err != nil {
-		return nil, err
-	}
-	for i := range args {
-		if args[i].Name == node.Name {
-			return args[i], nil
 		}
 	}
 
@@ -598,6 +620,13 @@ func (scope *EvalScope) evalStructSelector(node *ast.SelectorExpr) (*Variable, e
 	xv, err := scope.evalAST(node.X)
 	if err != nil {
 		return nil, err
+	}
+	rv, err := xv.findMethod(node.Sel.Name)
+	if err != nil {
+		return nil, err
+	}
+	if rv != nil {
+		return rv, nil
 	}
 	return xv.structMember(node.Sel.Name)
 }
@@ -621,12 +650,17 @@ func (scope *EvalScope) evalTypeAssert(node *ast.TypeAssertExpr) (*Variable, err
 	if xv.Children[0].Addr == 0 {
 		return nil, fmt.Errorf("interface conversion: %s is nil, not %s", xv.DwarfType.String(), exprToString(node.Type))
 	}
-	typ, err := scope.BinInfo.findTypeExpr(node.Type)
-	if err != nil {
-		return nil, err
-	}
-	if xv.Children[0].DwarfType.Common().Name != typ.Common().Name {
-		return nil, fmt.Errorf("interface conversion: %s is %s, not %s", xv.DwarfType.Common().Name, xv.Children[0].TypeString(), typ.Common().Name)
+	// Accept .(data) as a type assertion that always succeeds, so that users
+	// can access the data field of an interface without actually having to
+	// type the concrete type.
+	if idtyp, isident := node.Type.(*ast.Ident); !isident || idtyp.Name != "data" {
+		typ, err := scope.BinInfo.findTypeExpr(node.Type)
+		if err != nil {
+			return nil, err
+		}
+		if xv.Children[0].DwarfType.Common().Name != typ.Common().Name {
+			return nil, fmt.Errorf("interface conversion: %s is %s, not %s", xv.DwarfType.Common().Name, xv.Children[0].TypeString(), typ.Common().Name)
+		}
 	}
 	// loadInterface will set OnlyAddr for the data member since here we are
 	// passing false to loadData, however returning the variable with OnlyAddr
@@ -736,9 +770,9 @@ func (scope *EvalScope) evalReslice(node *ast.SliceExpr) (*Variable, error) {
 			return nil, fmt.Errorf("second slice argument must be empty for maps")
 		}
 		xev.mapSkip += int(low)
-		xev.loadValue(loadFullValue)
-		if xev.Unreadable != nil {
-			return nil, xev.Unreadable
+		xev.mapIterator() // reads map length
+		if int64(xev.mapSkip) >= xev.Len {
+			return nil, fmt.Errorf("map index out of bounds")
 		}
 		return xev, nil
 	default:
@@ -782,14 +816,18 @@ func (scope *EvalScope) evalAddrOf(node *ast.UnaryExpr) (*Variable, error) {
 		return nil, fmt.Errorf("can not take address of \"%s\"", exprToString(node.X))
 	}
 
-	xev.OnlyAddr = true
+	return xev.pointerToVariable(), nil
+}
 
-	typename := "*" + xev.DwarfType.Common().Name
-	rv := scope.newVariable("", 0, &godwarf.PtrType{CommonType: godwarf.CommonType{ByteSize: int64(scope.BinInfo.Arch.PtrSize()), Name: typename}, Type: xev.DwarfType}, scope.Mem)
-	rv.Children = []Variable{*xev}
+func (v *Variable) pointerToVariable() *Variable {
+	v.OnlyAddr = true
+
+	typename := "*" + v.DwarfType.Common().Name
+	rv := v.newVariable("", 0, &godwarf.PtrType{CommonType: godwarf.CommonType{ByteSize: int64(v.bi.Arch.PtrSize()), Name: typename}, Type: v.DwarfType}, v.mem)
+	rv.Children = []Variable{*v}
 	rv.loaded = true
 
-	return rv, nil
+	return rv
 }
 
 func constantUnaryOp(op token.Token, y constant.Value) (r constant.Value, err error) {
@@ -840,7 +878,7 @@ func (scope *EvalScope) evalUnary(node *ast.UnaryExpr) (*Variable, error) {
 		return nil, xv.Unreadable
 	}
 	if xv.FloatSpecial != 0 {
-		return nil, OperationOnSpecialFloatError
+		return nil, errOperationOnSpecialFloat
 	}
 	if xv.Value == nil {
 		return nil, fmt.Errorf("operator %s can not be applied to \"%s\"", node.Op.String(), exprToString(node.X))
@@ -958,7 +996,7 @@ func (scope *EvalScope) evalBinary(node *ast.BinaryExpr) (*Variable, error) {
 	}
 
 	if xv.FloatSpecial != 0 || yv.FloatSpecial != 0 {
-		return nil, OperationOnSpecialFloatError
+		return nil, errOperationOnSpecialFloat
 	}
 
 	typ, err := negotiateType(node.Op, xv, yv)
@@ -1160,10 +1198,18 @@ func (v *Variable) asUint() (uint64, error) {
 	return n, nil
 }
 
+type typeConvErr struct {
+	srcType, dstType godwarf.Type
+}
+
+func (err *typeConvErr) Error() string {
+	return fmt.Sprintf("can not convert value of type %s to %s", err.srcType.String(), err.dstType.String())
+}
+
 func (v *Variable) isType(typ godwarf.Type, kind reflect.Kind) error {
 	if v.DwarfType != nil {
-		if typ != nil && typ.String() != v.RealType.String() {
-			return fmt.Errorf("can not convert value of type %s to %s", v.DwarfType.String(), typ.String())
+		if typ == nil || !sameType(typ, v.RealType) {
+			return &typeConvErr{v.DwarfType, typ}
 		}
 		return nil
 	}
@@ -1219,6 +1265,34 @@ func (v *Variable) isType(typ godwarf.Type, kind reflect.Kind) error {
 	return nil
 }
 
+func sameType(t1, t2 godwarf.Type) bool {
+	// Because of a bug in the go linker a type that refers to another type
+	// (for example a pointer type) will usually use the typedef but rarely use
+	// the non-typedef entry directly.
+	// For types that we read directly from go this is fine because it's
+	// consistent, however we also synthesize some types ourselves
+	// (specifically pointers and slices) and we always use a reference through
+	// a typedef.
+	t1 = resolveTypedef(t1)
+	t2 = resolveTypedef(t2)
+
+	if tt1, isptr1 := t1.(*godwarf.PtrType); isptr1 {
+		tt2, isptr2 := t2.(*godwarf.PtrType)
+		if !isptr2 {
+			return false
+		}
+		return sameType(tt1.Type, tt2.Type)
+	}
+	if tt1, isslice1 := t1.(*godwarf.SliceType); isslice1 {
+		tt2, isslice2 := t2.(*godwarf.SliceType)
+		if !isslice2 {
+			return false
+		}
+		return sameType(tt1.ElemType, tt2.ElemType)
+	}
+	return t1.String() == t2.String()
+}
+
 func (v *Variable) sliceAccess(idx int) (*Variable, error) {
 	if idx < 0 || int64(idx) >= v.Len {
 		return nil, fmt.Errorf("index out of bounds")
@@ -1245,7 +1319,7 @@ func (v *Variable) mapAccess(idx *Variable) (*Variable, error) {
 		}
 		if first {
 			first = false
-			if err := idx.isType(key.DwarfType, key.Kind); err != nil {
+			if err := idx.isType(key.RealType, key.Kind); err != nil {
 				return nil, err
 			}
 		}
@@ -1296,6 +1370,77 @@ func (v *Variable) reslice(low int64, high int64) (*Variable, error) {
 	return r, nil
 }
 
+// findMethod finds method mname in the type of variable v
+func (v *Variable) findMethod(mname string) (*Variable, error) {
+	if _, isiface := v.RealType.(*godwarf.InterfaceType); isiface {
+		v.loadInterface(0, false, loadFullValue)
+		if v.Unreadable != nil {
+			return nil, v.Unreadable
+		}
+		return v.Children[0].findMethod(mname)
+	}
+
+	typ := v.DwarfType
+	ptyp, isptr := typ.(*godwarf.PtrType)
+	if isptr {
+		typ = ptyp.Type
+	}
+
+	if _, istypedef := typ.(*godwarf.TypedefType); !istypedef {
+		return nil, nil
+	}
+
+	typePath := typ.Common().Name
+	dot := strings.LastIndex(typePath, ".")
+	if dot < 0 {
+		// probably just a C type
+		return nil, nil
+	}
+
+	pkg := typePath[:dot]
+	receiver := typePath[dot+1:]
+
+	if fn, ok := v.bi.LookupFunc[fmt.Sprintf("%s.%s.%s", pkg, receiver, mname)]; ok {
+		r, err := functionToVariable(fn, v.bi, v.mem)
+		if err != nil {
+			return nil, err
+		}
+		if isptr {
+			r.Children = append(r.Children, *(v.maybeDereference()))
+		} else {
+			r.Children = append(r.Children, *v)
+		}
+		return r, nil
+	}
+
+	if fn, ok := v.bi.LookupFunc[fmt.Sprintf("%s.(*%s).%s", pkg, receiver, mname)]; ok {
+		r, err := functionToVariable(fn, v.bi, v.mem)
+		if err != nil {
+			return nil, err
+		}
+		if isptr {
+			r.Children = append(r.Children, *v)
+		} else {
+			r.Children = append(r.Children, *(v.pointerToVariable()))
+		}
+		return r, nil
+	}
+
+	return nil, nil
+}
+
+func functionToVariable(fn *Function, bi *BinaryInfo, mem MemoryReadWriter) (*Variable, error) {
+	typ, err := fn.fakeType(bi, true)
+	if err != nil {
+		return nil, err
+	}
+	v := newVariable(fn.Name, 0, typ, bi, mem)
+	v.Value = constant.MakeString(fn.Name)
+	v.loaded = true
+	v.Base = uintptr(fn.Entry)
+	return v, nil
+}
+
 func fakeSliceType(fieldType godwarf.Type) godwarf.Type {
 	return &godwarf.SliceType{
 		StructType: godwarf.StructType{
@@ -1309,4 +1454,62 @@ func fakeSliceType(fieldType godwarf.Type) godwarf.Type {
 		},
 		ElemType: fieldType,
 	}
+}
+
+var errMethodEvalUnsupported = errors.New("evaluating methods not supported on this version of Go")
+
+func (fn *Function) fakeType(bi *BinaryInfo, removeReceiver bool) (*godwarf.FuncType, error) {
+	if producer := bi.Producer(); producer == "" || !goversion.ProducerAfterOrEqual(producer, 1, 10) {
+		// versions of Go prior to 1.10 do not distinguish between parameters and
+		// return values, therefore we can't use a subprogram DIE to derive a
+		// function type.
+		return nil, errMethodEvalUnsupported
+	}
+	_, formalArgs, err := funcCallArgs(fn, bi, true)
+	if err != nil {
+		return nil, err
+	}
+
+	if removeReceiver {
+		formalArgs = formalArgs[1:]
+	}
+
+	args := make([]string, 0, len(formalArgs))
+	rets := make([]string, 0, len(formalArgs))
+
+	for _, formalArg := range formalArgs {
+		var s string
+		if strings.HasPrefix(formalArg.name, "~") {
+			s = formalArg.typ.String()
+		} else {
+			s = fmt.Sprintf("%s %s", formalArg.name, formalArg.typ.String())
+		}
+		if formalArg.isret {
+			rets = append(rets, s)
+		} else {
+			args = append(args, s)
+		}
+	}
+
+	argstr := strings.Join(args, ", ")
+	var retstr string
+	switch len(rets) {
+	case 0:
+		retstr = ""
+	case 1:
+		retstr = " " + rets[0]
+	default:
+		retstr = " (" + strings.Join(rets, ", ") + ")"
+	}
+	return &godwarf.FuncType{
+		CommonType: godwarf.CommonType{
+			Name:        "func(" + argstr + ")" + retstr,
+			ReflectKind: reflect.Func,
+		},
+		//TODO(aarzilli): at the moment we aren't using the ParamType and
+		// ReturnType fields of FuncType anywhere (when this is returned to the
+		// client it's first converted to a string and the function calling code
+		// reads the subroutine entry because it needs to know the stack offsets).
+		// If we start using them they should be filled here.
+	}, nil
 }

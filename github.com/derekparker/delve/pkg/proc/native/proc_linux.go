@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -18,6 +19,8 @@ import (
 	sys "golang.org/x/sys/unix"
 
 	"github.com/derekparker/delve/pkg/proc"
+	"github.com/derekparker/delve/pkg/proc/linutil"
+	"github.com/mattn/go-isatty"
 )
 
 // Process statuses
@@ -43,22 +46,36 @@ type OSProcessDetails struct {
 // Launch creates and begins debugging a new process. First entry in
 // `cmd` is the program to run, and then rest are the arguments
 // to be supplied to that process. `wd` is working directory of the program.
-func Launch(cmd []string, wd string) (*Process, error) {
+// If the DWARF information cannot be found in the binary, Delve will look
+// for external debug files in the directories passed in.
+func Launch(cmd []string, wd string, foreground bool, debugInfoDirs []string) (*Process, error) {
 	var (
 		process *exec.Cmd
 		err     error
 	)
 	// check that the argument to Launch is an executable file
 	if fi, staterr := os.Stat(cmd[0]); staterr == nil && (fi.Mode()&0111) == 0 {
-		return nil, proc.NotExecutableErr
+		return nil, proc.ErrNotExecutable
 	}
+
+	if !isatty.IsTerminal(os.Stdin.Fd()) {
+		// exec.(*Process).Start will fail if we try to send a process to
+		// foreground but we are not attached to a terminal.
+		foreground = false
+	}
+
 	dbp := New(0)
+	dbp.common = proc.NewCommonProcess(true)
 	dbp.execPtraceFunc(func() {
 		process = exec.Command(cmd[0])
 		process.Args = cmd
 		process.Stdout = os.Stdout
 		process.Stderr = os.Stderr
-		process.SysProcAttr = &syscall.SysProcAttr{Ptrace: true, Setpgid: true}
+		process.SysProcAttr = &syscall.SysProcAttr{Ptrace: true, Setpgid: true, Foreground: foreground}
+		if foreground {
+			signal.Ignore(syscall.SIGTTOU, syscall.SIGTTIN)
+			process.Stdin = os.Stdin
+		}
 		if wd != "" {
 			process.Dir = wd
 		}
@@ -73,12 +90,15 @@ func Launch(cmd []string, wd string) (*Process, error) {
 	if err != nil {
 		return nil, fmt.Errorf("waiting for target execve failed: %s", err)
 	}
-	return initializeDebugProcess(dbp, process.Path)
+	return initializeDebugProcess(dbp, process.Path, debugInfoDirs)
 }
 
-// Attach to an existing process with the given PID.
-func Attach(pid int) (*Process, error) {
+// Attach to an existing process with the given PID. Once attached, if
+// the DWARF information cannot be found in the binary, Delve will look
+// for external debug files in the directories passed in.
+func Attach(pid int, debugInfoDirs []string) (*Process, error) {
 	dbp := New(pid)
+	dbp.common = proc.NewCommonProcess(true)
 
 	var err error
 	dbp.execPtraceFunc(func() { err = PtraceAttach(dbp.pid) })
@@ -90,7 +110,7 @@ func Attach(pid int) (*Process, error) {
 		return nil, err
 	}
 
-	dbp, err = initializeDebugProcess(dbp, "")
+	dbp, err = initializeDebugProcess(dbp, "", debugInfoDirs)
 	if err != nil {
 		dbp.Detach(false)
 		return nil, err
@@ -213,7 +233,7 @@ func (dbp *Process) trapWaitInternal(pid int, halt bool) (*Thread, error) {
 		if status.Exited() {
 			if wpid == dbp.pid {
 				dbp.postExit()
-				return nil, proc.ProcessExitedError{Pid: wpid, Status: status.ExitStatus()}
+				return nil, proc.ErrProcessExited{Pid: wpid, Status: status.ExitStatus()}
 			}
 			delete(dbp.threads, wpid)
 			continue
@@ -271,7 +291,7 @@ func (dbp *Process) trapWaitInternal(pid int, halt bool) (*Thread, error) {
 			// TODO(dp) alert user about unexpected signals here.
 			if err := th.resumeWithSig(int(status.StopSignal())); err != nil {
 				if err == sys.ESRCH {
-					return nil, proc.ProcessExitedError{Pid: dbp.pid}
+					return nil, proc.ErrProcessExited{Pid: dbp.pid}
 				}
 				return nil, err
 			}
@@ -403,7 +423,7 @@ func (dbp *Process) resume() error {
 // stop stops all running threads threads and sets breakpoints
 func (dbp *Process) stop(trapthread *Thread) (err error) {
 	if dbp.exited {
-		return &proc.ProcessExitedError{Pid: dbp.Pid()}
+		return &proc.ErrProcessExited{Pid: dbp.Pid()}
 	}
 	for _, th := range dbp.threads {
 		if !th.Stopped() {
@@ -461,6 +481,15 @@ func (dbp *Process) detach(kill bool) error {
 		sys.Kill(dbp.pid, sys.SIGCONT)
 	}
 	return nil
+}
+
+func (dbp *Process) entryPoint() (uint64, error) {
+	auxvbuf, err := ioutil.ReadFile(fmt.Sprintf("/proc/%d/auxv", dbp.pid))
+	if err != nil {
+		return 0, fmt.Errorf("could not read auxiliary vector: %v", err)
+	}
+
+	return linutil.EntryPointFromAuxvAMD64(auxvbuf), nil
 }
 
 func killProcess(pid int) error {

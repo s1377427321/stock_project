@@ -265,7 +265,7 @@ func (loc *AddrLocationSpec) Find(d *Debugger, scope *proc.EvalScope, locStr str
 		}
 		return []api.Location{{PC: uint64(addr)}}, nil
 	} else {
-		v, err := scope.EvalExpression(loc.AddrExpr, proc.LoadConfig{true, 0, 0, 0, 0})
+		v, err := scope.EvalExpression(loc.AddrExpr, proc.LoadConfig{true, 0, 0, 0, 0, 0})
 		if err != nil {
 			return nil, err
 		}
@@ -316,7 +316,7 @@ func (ale AmbiguousLocationError) Error() string {
 	var candidates []string
 	if ale.CandidatesLocation != nil {
 		for i := range ale.CandidatesLocation {
-			candidates = append(candidates, ale.CandidatesLocation[i].Function.Name)
+			candidates = append(candidates, ale.CandidatesLocation[i].Function.Name())
 		}
 
 	} else {

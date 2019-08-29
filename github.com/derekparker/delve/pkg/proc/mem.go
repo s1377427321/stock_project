@@ -17,12 +17,16 @@ type MemoryReader interface {
 	ReadMemory(buf []byte, addr uintptr) (n int, err error)
 }
 
+// MemoryReadWriter is an interface for reading or writing to
+// the targets memory. This allows us to read from the actual
+// target memory or possibly a cache.
 type MemoryReadWriter interface {
 	MemoryReader
 	WriteMemory(addr uintptr, data []byte) (written int, err error)
 }
 
 type memCache struct {
+	loaded    bool
 	cacheAddr uintptr
 	cache     []byte
 	mem       MemoryReadWriter
@@ -34,6 +38,13 @@ func (m *memCache) contains(addr uintptr, size int) bool {
 
 func (m *memCache) ReadMemory(data []byte, addr uintptr) (n int, err error) {
 	if m.contains(addr, len(data)) {
+		if !m.loaded {
+			_, err := m.mem.ReadMemory(m.cache, m.cacheAddr)
+			if err != nil {
+				return 0, err
+			}
+			m.loaded = true
+		}
 		copy(data, m.cache[addr-m.cacheAddr:])
 		return len(data), nil
 	}
@@ -56,23 +67,11 @@ func cacheMemory(mem MemoryReadWriter, addr uintptr, size int) MemoryReadWriter 
 	case *memCache:
 		if cacheMem.contains(addr, size) {
 			return mem
-		} else {
-			cache := make([]byte, size)
-			_, err := cacheMem.mem.ReadMemory(cache, addr)
-			if err != nil {
-				return mem
-			}
-			return &memCache{addr, cache, mem}
 		}
 	case *compositeMemory:
 		return mem
 	}
-	cache := make([]byte, size)
-	_, err := mem.ReadMemory(cache, addr)
-	if err != nil {
-		return mem
-	}
-	return &memCache{addr, cache, mem}
+	return &memCache{false, addr, make([]byte, size), mem}
 }
 
 // fakeAddress used by extractVarInfoFromEntry for variables that do not
@@ -139,4 +138,19 @@ func DereferenceMemory(mem MemoryReadWriter) MemoryReadWriter {
 		return mem.realmem
 	}
 	return mem
+}
+
+// bufferMemoryReadWriter is dummy a MemoryReadWriter backed by a []byte.
+type bufferMemoryReadWriter struct {
+	buf []byte
+}
+
+func (mem *bufferMemoryReadWriter) ReadMemory(buf []byte, addr uintptr) (n int, err error) {
+	copy(buf, mem.buf[addr-fakeAddress:][:len(buf)])
+	return len(buf), nil
+}
+
+func (mem *bufferMemoryReadWriter) WriteMemory(addr uintptr, data []byte) (written int, err error) {
+	copy(mem.buf[addr-fakeAddress:], data)
+	return len(data), nil
 }

@@ -1,3 +1,5 @@
+//+build darwin,macnative
+
 package native
 
 // #include "proc_darwin.h"
@@ -36,10 +38,10 @@ type OSProcessDetails struct {
 // custom fork/exec process in order to take advantage of
 // PT_SIGEXC on Darwin which will turn Unix signals into
 // Mach exceptions.
-func Launch(cmd []string, wd string) (*Process, error) {
+func Launch(cmd []string, wd string, foreground bool, _ []string) (*Process, error) {
 	// check that the argument to Launch is an executable file
 	if fi, staterr := os.Stat(cmd[0]); staterr == nil && (fi.Mode()&0111) == 0 {
-		return nil, proc.NotExecutableErr
+		return nil, proc.ErrNotExecutable
 	}
 	argv0Go, err := filepath.Abs(cmd[0])
 	if err != nil {
@@ -103,7 +105,7 @@ func Launch(cmd []string, wd string) (*Process, error) {
 		return nil, err
 	}
 
-	dbp.allGCache = nil
+	dbp.common.ClearAllGCache()
 	for _, th := range dbp.threads {
 		th.CurrentBreakpoint.Clear()
 	}
@@ -117,7 +119,7 @@ func Launch(cmd []string, wd string) (*Process, error) {
 	}
 
 	dbp.os.initialized = true
-	dbp, err = initializeDebugProcess(dbp, argv0Go)
+	dbp, err = initializeDebugProcess(dbp, argv0Go, []string{})
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +132,7 @@ func Launch(cmd []string, wd string) (*Process, error) {
 }
 
 // Attach to an existing process with the given PID.
-func Attach(pid int) (*Process, error) {
+func Attach(pid int, _ []string) (*Process, error) {
 	dbp := New(pid)
 
 	kret := C.acquire_mach_task(C.int(pid),
@@ -153,7 +155,7 @@ func Attach(pid int) (*Process, error) {
 		return nil, err
 	}
 
-	dbp, err = initializeDebugProcess(dbp, "")
+	dbp, err = initializeDebugProcess(dbp, "", []string{})
 	if err != nil {
 		dbp.Detach(false)
 		return nil, err
@@ -305,7 +307,7 @@ func (dbp *Process) trapWait(pid int) (*Thread, error) {
 				return nil, err
 			}
 			dbp.postExit()
-			return nil, proc.ProcessExitedError{Pid: dbp.pid, Status: status.ExitStatus()}
+			return nil, proc.ErrProcessExited{Pid: dbp.pid, Status: status.ExitStatus()}
 
 		case C.MACH_RCV_INTERRUPTED:
 			dbp.stopMu.Lock()
@@ -402,7 +404,7 @@ func (dbp *Process) exitGuard(err error) error {
 	_, status, werr := dbp.wait(dbp.pid, sys.WNOHANG)
 	if werr == nil && status.Exited() {
 		dbp.postExit()
-		return proc.ProcessExitedError{Pid: dbp.pid, Status: status.ExitStatus()}
+		return proc.ErrProcessExited{Pid: dbp.pid, Status: status.ExitStatus()}
 	}
 	return err
 }
@@ -429,7 +431,7 @@ func (dbp *Process) resume() error {
 // stop stops all running threads and sets breakpoints
 func (dbp *Process) stop(trapthread *Thread) (err error) {
 	if dbp.exited {
-		return &proc.ProcessExitedError{Pid: dbp.Pid()}
+		return &proc.ErrProcessExited{Pid: dbp.Pid()}
 	}
 	for _, th := range dbp.threads {
 		if !th.Stopped() {
@@ -460,4 +462,9 @@ func (dbp *Process) stop(trapthread *Thread) (err error) {
 
 func (dbp *Process) detach(kill bool) error {
 	return PtraceDetach(dbp.pid, 0)
+}
+
+func (dbp *Process) entryPoint() (uint64, error) {
+	//TODO(aarzilli): implement this
+	return 0, nil
 }

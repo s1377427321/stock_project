@@ -26,7 +26,9 @@ import (
 
 var (
 	// Log is whether to log debug statements.
-	Log string
+	Log bool
+	// LogOutput is a comma separated list of components that should produce debug output.
+	LogOutput string
 	// Headless is whether to run without terminal.
 	Headless bool
 	// APIVersion is the requested API version while running headless
@@ -49,6 +51,8 @@ var (
 	RootCommand *cobra.Command
 
 	traceAttachPid  int
+	traceExecFile   string
+	traceTestBinary bool
 	traceStackDepth int
 
 	conf *config.Config
@@ -86,11 +90,15 @@ func New(docCall bool) *cobra.Command {
 	}
 
 	RootCommand.PersistentFlags().StringVarP(&Addr, "listen", "l", "localhost:0", "Debugging server listen address.")
-	RootCommand.PersistentFlags().StringVarP(&Log, "log", "", "false", `Comma separated list of components that should produce debug output, possible values:
+	RootCommand.PersistentFlags().BoolVarP(&Log, "log", "", false, "Enable debugging server logging.")
+	RootCommand.PersistentFlags().StringVarP(&LogOutput, "log-output", "", "", `Comma separated list of components that should produce debug output, possible values:
 	debugger	Log debugger commands
 	gdbwire		Log connection to gdbserial backend
 	lldbout		Copy output from debugserver/lldb to standard output
-`)
+	debuglineerr	Log recoverable errors reading .debug_line
+	rpc		Log all RPC messages
+	fncall		Log function call protocol
+Defaults to "debugger" when logging is enabled with --log.`)
 	RootCommand.PersistentFlags().BoolVarP(&Headless, "headless", "", false, "Run debug server only, in headless mode.")
 	RootCommand.PersistentFlags().BoolVarP(&AcceptMulti, "accept-multiclient", "", false, "Allows a headless server to accept multiple client connections. Note that the server API is not reentrant and clients will have to coordinate.")
 	RootCommand.PersistentFlags().IntVar(&APIVersion, "api-version", 1, "Selects API version when headless.")
@@ -215,6 +223,8 @@ to know what functions your process is executing.`,
 		Run: traceCmd,
 	}
 	traceCommand.Flags().IntVarP(&traceAttachPid, "pid", "p", 0, "Pid to attach to.")
+	traceCommand.Flags().StringVarP(&traceExecFile, "exec", "e", "", "Binary file to exec and trace.")
+	traceCommand.Flags().BoolVarP(&traceTestBinary, "test", "t", false, "Trace a test binary.")
 	traceCommand.Flags().IntVarP(&traceStackDepth, "stack", "s", 0, "Show stack trace with given depth.")
 	traceCommand.Flags().String("output", "debug", "Output path for the binary.")
 	RootCommand.AddCommand(traceCommand)
@@ -291,13 +301,8 @@ func debugCmd(cmd *cobra.Command, args []string) {
 			return 1
 		}
 
-		var pkg string
 		dlvArgs, targetArgs := splitArgs(cmd, args)
-
-		if len(dlvArgs) > 0 {
-			pkg = args[0]
-		}
-		err = gobuild(debugname, pkg)
+		err = gobuild(debugname, dlvArgs)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			return 1
@@ -311,12 +316,17 @@ func debugCmd(cmd *cobra.Command, args []string) {
 
 func traceCmd(cmd *cobra.Command, args []string) {
 	status := func() int {
-		logflags.Setup(Log)
-
-		debugname, err := filepath.Abs(cmd.Flag("output").Value.String())
+		err := logflags.Setup(Log, LogOutput)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			return 1
+		}
+
+		if Headless {
+			fmt.Fprintf(os.Stderr, "Warning: headless mode not supported with trace\n")
+		}
+		if AcceptMulti {
+			fmt.Fprintf(os.Stderr, "Warning: accept multiclient mode not supported with trace")
 		}
 
 		var regexp string
@@ -325,27 +335,46 @@ func traceCmd(cmd *cobra.Command, args []string) {
 		dlvArgs, targetArgs := splitArgs(cmd, args)
 
 		if traceAttachPid == 0 {
-			var pkg string
-			switch len(dlvArgs) {
-			case 1:
+			var dlvArgsLen = len(dlvArgs)
+
+			if dlvArgsLen == 1 {
 				regexp = args[0]
-			case 2:
-				pkg = args[0]
-				regexp = args[1]
+				dlvArgs = dlvArgs[0:0]
+			} else if dlvArgsLen >= 2 {
+				if traceExecFile != "" {
+					fmt.Fprintln(os.Stderr, "Cannot specify package when using exec.")
+					return 1
+				}
+				regexp = dlvArgs[dlvArgsLen-1]
+				dlvArgs = dlvArgs[:dlvArgsLen-1]
 			}
-			if err := gobuild(debugname, pkg); err != nil {
-				return 1
+
+			debugname := traceExecFile
+			if traceExecFile == "" {
+				debugname, err = filepath.Abs(cmd.Flag("output").Value.String())
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "%v\n", err)
+					return 1
+				}
+				if traceTestBinary {
+					if err := gotestbuild(debugname, dlvArgs); err != nil {
+						fmt.Fprintf(os.Stderr, "%v\n", err)
+						return 1
+					}
+				} else {
+					if err := gobuild(debugname, dlvArgs); err != nil {
+						fmt.Fprintf(os.Stderr, "%v\n", err)
+						return 1
+					}
+				}
+				defer remove(debugname)
 			}
-			defer remove(debugname)
 
 			processArgs = append([]string{debugname}, targetArgs...)
 		}
-		// Make a TCP listener
-		listener, err := net.Listen("tcp", Addr)
-		if err != nil {
-			fmt.Printf("couldn't start listener: %s\n", err)
-			return 1
-		}
+
+		// Make a local in-memory connection that client and server use to communicate
+		listener, clientConn := service.ListenerPipe()
 		defer listener.Close()
 
 		// Create and start a debug server
@@ -356,22 +385,45 @@ func traceCmd(cmd *cobra.Command, args []string) {
 			APIVersion:  2,
 			WorkingDir:  WorkingDir,
 			Backend:     Backend,
-		}, logflags.Debugger())
+		})
 		if err := server.Run(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		client := rpc2.NewClient(listener.Addr().String())
+		client := rpc2.NewClientFromConn(clientConn)
 		funcs, err := client.ListFunctions(regexp)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 		for i := range funcs {
-			_, err = client.CreateBreakpoint(&api.Breakpoint{FunctionName: funcs[i], Tracepoint: true, Line: -1, Stacktrace: traceStackDepth, LoadArgs: &terminal.ShortLoadConfig})
+			_, err = client.CreateBreakpoint(&api.Breakpoint{
+				FunctionName: funcs[i],
+				Tracepoint:   true,
+				Line:         -1,
+				Stacktrace:   traceStackDepth,
+				LoadArgs:     &terminal.ShortLoadConfig,
+			})
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				return 1
+			}
+			addrs, err := client.FunctionReturnLocations(funcs[i])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			for i := range addrs {
+				_, err = client.CreateBreakpoint(&api.Breakpoint{
+					Addr:        addrs[i],
+					TraceReturn: true,
+					Line:        -1,
+					LoadArgs:    &terminal.ShortLoadConfig,
+				})
+				if err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					return 1
+				}
 			}
 		}
 		cmds := terminal.DebugCommands(client)
@@ -395,13 +447,8 @@ func testCmd(cmd *cobra.Command, args []string) {
 			return 1
 		}
 
-		var pkg string
 		dlvArgs, targetArgs := splitArgs(cmd, args)
-
-		if len(dlvArgs) > 0 {
-			pkg = args[0]
-		}
-		err = gotestbuild(debugname, pkg)
+		err = gotestbuild(debugname, dlvArgs)
 		if err != nil {
 			return 1
 		}
@@ -432,7 +479,7 @@ func connectCmd(cmd *cobra.Command, args []string) {
 		fmt.Fprint(os.Stderr, "An empty address was provided. You must provide an address as the first argument.\n")
 		os.Exit(1)
 	}
-	os.Exit(connect(addr, conf))
+	os.Exit(connect(addr, nil, conf, executingOther))
 }
 
 func splitArgs(cmd *cobra.Command, args []string) ([]string, []string) {
@@ -442,10 +489,23 @@ func splitArgs(cmd *cobra.Command, args []string) ([]string, []string) {
 	return args, []string{}
 }
 
-func connect(addr string, conf *config.Config) int {
+func connect(addr string, clientConn net.Conn, conf *config.Config, kind executeKind) int {
 	// Create and start a terminal - attach to running instance
-	client := rpc2.NewClient(addr)
+	var client *rpc2.RPCClient
+	if clientConn != nil {
+		client = rpc2.NewClientFromConn(clientConn)
+	} else {
+		client = rpc2.NewClient(addr)
+	}
+	if client.Recorded() && (kind == executingGeneratedFile || kind == executingGeneratedTest) {
+		// When using the rr backend remove the trace directory if we built the
+		// executable
+		if tracedir, err := client.TraceDirectory(); err == nil {
+			defer SafeRemoveAll(tracedir)
+		}
+	}
 	term := terminal.New(client, conf)
+	term.InitFile = InitFile
 	status, err := term.Run()
 	if err != nil {
 		fmt.Println(err)
@@ -463,24 +523,39 @@ const (
 )
 
 func execute(attachPid int, processArgs []string, conf *config.Config, coreFile string, kind executeKind) int {
-	logflags.Setup(Log)
+	if err := logflags.Setup(Log, LogOutput); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+
+	if Headless && (InitFile != "") {
+		fmt.Fprint(os.Stderr, "Warning: init file ignored\n")
+	}
+
+	if !Headless && AcceptMulti {
+		fmt.Fprint(os.Stderr, "Warning accept-multi: ignored\n")
+		// AcceptMulti won't work in normal (non-headless) mode because we always
+		// call server.Stop after the terminal client exits.
+		AcceptMulti = false
+	}
+
+	var listener net.Listener
+	var clientConn net.Conn
+	var err error
 
 	// Make a TCP listener
-	listener, err := net.Listen("tcp", Addr)
+	if Headless {
+		listener, err = net.Listen("tcp", Addr)
+	} else {
+		listener, clientConn = service.ListenerPipe()
+	}
 	if err != nil {
 		fmt.Printf("couldn't start listener: %s\n", err)
 		return 1
 	}
 	defer listener.Close()
 
-	if Headless && (InitFile != "") {
-		fmt.Fprint(os.Stderr, "Warning: init file ignored\n")
-	}
-
-	var server interface {
-		Run() error
-		Stop(bool) error
-	}
+	var server service.Server
 
 	disconnectChan := make(chan struct{})
 
@@ -488,24 +563,26 @@ func execute(attachPid int, processArgs []string, conf *config.Config, coreFile 
 	switch APIVersion {
 	case 1, 2:
 		server = rpccommon.NewServer(&service.Config{
-			Listener:    listener,
-			ProcessArgs: processArgs,
-			AttachPid:   attachPid,
-			AcceptMulti: AcceptMulti,
-			APIVersion:  APIVersion,
-			WorkingDir:  WorkingDir,
-			Backend:     Backend,
-			CoreFile:    coreFile,
+			Listener:             listener,
+			ProcessArgs:          processArgs,
+			AttachPid:            attachPid,
+			AcceptMulti:          AcceptMulti,
+			APIVersion:           APIVersion,
+			WorkingDir:           WorkingDir,
+			Backend:              Backend,
+			CoreFile:             coreFile,
+			Foreground:           Headless,
+			DebugInfoDirectories: conf.DebugInfoDirectories,
 
 			DisconnectChan: disconnectChan,
-		}, logflags.Debugger())
+		})
 	default:
 		fmt.Printf("Unknown API version: %d\n", APIVersion)
 		return 1
 	}
 
 	if err := server.Run(); err != nil {
-		if err == api.NotExecutableErr {
+		if err == api.ErrNotExecutable {
 			switch kind {
 			case executingGeneratedFile:
 				fmt.Fprintln(os.Stderr, "Can not debug non-main package")
@@ -523,35 +600,21 @@ func execute(attachPid int, processArgs []string, conf *config.Config, coreFile 
 
 	var status int
 	if Headless {
-		// Print listener address
-		fmt.Printf("API server listening at: %s\n", listener.Addr())
 		ch := make(chan os.Signal, 1)
 		signal.Notify(ch, syscall.SIGINT)
 		select {
 		case <-ch:
 		case <-disconnectChan:
 		}
-		err = server.Stop(true)
-	} else {
-		// Create and start a terminal
-		client := rpc2.NewClient(listener.Addr().String())
-		if client.Recorded() && (kind == executingGeneratedFile || kind == executingGeneratedTest) {
-			// When using the rr backend remove the trace directory if we built the
-			// executable
-			if tracedir, err := client.TraceDirectory(); err == nil {
-				defer SafeRemoveAll(tracedir)
-			}
+		err = server.Stop()
+		if err != nil {
+			fmt.Println(err)
 		}
-		term := terminal.New(client, conf)
-		term.InitFile = InitFile
-		status, err = term.Run()
+
+		return status
 	}
 
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	return status
+	return connect(listener.Addr().String(), clientConn, conf, kind)
 }
 
 func optflags(args []string) []string {
@@ -571,23 +634,23 @@ func optflags(args []string) []string {
 	return args
 }
 
-func gobuild(debugname, pkg string) error {
+func gobuild(debugname string, pkgs []string) error {
 	args := []string{"-o", debugname}
 	args = optflags(args)
 	if BuildFlags != "" {
 		args = append(args, config.SplitQuotedFields(BuildFlags, '\'')...)
 	}
-	args = append(args, pkg)
+	args = append(args, pkgs...)
 	return gocommand("build", args...)
 }
 
-func gotestbuild(debugname, pkg string) error {
+func gotestbuild(debugname string, pkgs []string) error {
 	args := []string{"-c", "-o", debugname}
 	args = optflags(args)
 	if BuildFlags != "" {
 		args = append(args, config.SplitQuotedFields(BuildFlags, '\'')...)
 	}
-	args = append(args, pkg)
+	args = append(args, pkgs...)
 	return gocommand("test", args...)
 }
 

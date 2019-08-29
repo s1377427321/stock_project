@@ -56,8 +56,7 @@ func loadModuleData(bi *BinaryInfo, mem MemoryReadWriter) (err error) {
 	return
 }
 
-func resolveTypeOff(bi *BinaryInfo, typeAddr uintptr, off uintptr, mem MemoryReadWriter) (*Variable, error) {
-	// See runtime.(*_type).typeOff in $GOROOT/src/runtime/type.go
+func findModuleDataForType(bi *BinaryInfo, typeAddr uintptr, mem MemoryReadWriter) (*moduleData, error) {
 	if err := loadModuleData(bi, mem); err != nil {
 		return nil, err
 	}
@@ -67,6 +66,16 @@ func resolveTypeOff(bi *BinaryInfo, typeAddr uintptr, off uintptr, mem MemoryRea
 		if typeAddr >= bi.moduleData[i].types && typeAddr < bi.moduleData[i].etypes {
 			md = &bi.moduleData[i]
 		}
+	}
+
+	return md, nil
+}
+
+func resolveTypeOff(bi *BinaryInfo, typeAddr uintptr, off uintptr, mem MemoryReadWriter) (*Variable, error) {
+	// See runtime.(*_type).typeOff in $GOROOT/src/runtime/type.go
+	md, err := findModuleDataForType(bi, typeAddr, mem)
+	if err != nil {
+		return nil, err
 	}
 
 	rtyp, err := bi.findType("runtime._type")
@@ -79,7 +88,7 @@ func resolveTypeOff(bi *BinaryInfo, typeAddr uintptr, off uintptr, mem MemoryRea
 		if err != nil {
 			return nil, err
 		}
-		v.loadValue(LoadConfig{false, 1, 0, 0, -1})
+		v.loadValue(LoadConfig{false, 1, 0, 0, -1, 0})
 		addr, _ := constant.Int64Val(v.Value)
 		return v.newVariable(v.Name, uintptr(addr), rtyp, mem), nil
 	}

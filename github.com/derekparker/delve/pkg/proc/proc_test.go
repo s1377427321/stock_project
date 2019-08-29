@@ -21,14 +21,15 @@ import (
 
 	"github.com/derekparker/delve/pkg/dwarf/frame"
 	"github.com/derekparker/delve/pkg/goversion"
+	"github.com/derekparker/delve/pkg/logflags"
 	"github.com/derekparker/delve/pkg/proc"
 	"github.com/derekparker/delve/pkg/proc/gdbserial"
 	"github.com/derekparker/delve/pkg/proc/native"
 	protest "github.com/derekparker/delve/pkg/proc/test"
 )
 
-var normalLoadConfig = proc.LoadConfig{true, 1, 64, 64, -1}
-var testBackend string
+var normalLoadConfig = proc.LoadConfig{true, 1, 64, 64, -1, 0}
+var testBackend, buildMode string
 
 func init() {
 	runtime.GOMAXPROCS(4)
@@ -37,13 +38,16 @@ func init() {
 
 func TestMain(m *testing.M) {
 	flag.StringVar(&testBackend, "backend", "", "selects backend")
+	flag.StringVar(&buildMode, "test-buildmode", "", "selects build mode")
+	var logConf string
+	flag.StringVar(&logConf, "log", "", "configures logging")
 	flag.Parse()
-	if testBackend == "" {
-		testBackend = os.Getenv("PROCTEST")
-		if testBackend == "" {
-			testBackend = "native"
-		}
+	protest.DefaultTestBackend(&testBackend)
+	if buildMode != "" && buildMode != "pie" {
+		fmt.Fprintf(os.Stderr, "unknown build mode %q", buildMode)
+		os.Exit(1)
 	}
+	logflags.Setup(logConf != "", logConf)
 	os.Exit(protest.RunTestsWithFixtures(m))
 }
 
@@ -52,6 +56,9 @@ func withTestProcess(name string, t testing.TB, fn func(p proc.Process, fixture 
 }
 
 func withTestProcessArgs(name string, t testing.TB, wd string, args []string, buildFlags protest.BuildFlags, fn func(p proc.Process, fixture protest.Fixture)) {
+	if buildMode == "pie" {
+		buildFlags |= protest.BuildModePIE
+	}
 	fixture := protest.BuildFixture(name, buildFlags)
 	var p proc.Process
 	var err error
@@ -59,13 +66,13 @@ func withTestProcessArgs(name string, t testing.TB, wd string, args []string, bu
 
 	switch testBackend {
 	case "native":
-		p, err = native.Launch(append([]string{fixture.Path}, args...), wd)
+		p, err = native.Launch(append([]string{fixture.Path}, args...), wd, false, []string{})
 	case "lldb":
-		p, err = gdbserial.LLDBLaunch(append([]string{fixture.Path}, args...), wd)
+		p, err = gdbserial.LLDBLaunch(append([]string{fixture.Path}, args...), wd, false, []string{})
 	case "rr":
 		protest.MustHaveRecordingAllowed(t)
 		t.Log("recording")
-		p, tracedir, err = gdbserial.RecordAndReplay(append([]string{fixture.Path}, args...), wd, true)
+		p, tracedir, err = gdbserial.RecordAndReplay(append([]string{fixture.Path}, args...), wd, true, []string{})
 		t.Logf("replaying %q", tracedir)
 	default:
 		t.Fatal("unknown backend")
@@ -135,7 +142,7 @@ func TestExit(t *testing.T) {
 	protest.AllowRecording(t)
 	withTestProcess("continuetestprog", t, func(p proc.Process, fixture protest.Fixture) {
 		err := proc.Continue(p)
-		pe, ok := err.(proc.ProcessExitedError)
+		pe, ok := err.(proc.ErrProcessExited)
 		if !ok {
 			t.Fatalf("Continue() returned unexpected error type %s", err)
 		}
@@ -155,7 +162,7 @@ func TestExitAfterContinue(t *testing.T) {
 		assertNoError(err, t, "setFunctionBreakpoint()")
 		assertNoError(proc.Continue(p), t, "First Continue()")
 		err = proc.Continue(p)
-		pe, ok := err.(proc.ProcessExitedError)
+		pe, ok := err.(proc.ErrProcessExited)
 		if !ok {
 			t.Fatalf("Continue() returned unexpected error type %s", pe)
 		}
@@ -897,6 +904,9 @@ func stackMatch(stack []loc, locations []proc.Stackframe, skipRuntime bool) bool
 
 func TestStacktraceGoroutine(t *testing.T) {
 	mainStack := []loc{{14, "main.stacktraceme"}, {29, "main.main"}}
+	if goversion.VersionAfterOrEqual(runtime.Version(), 1, 11) {
+		mainStack[0].line = 15
+	}
 	agoroutineStacks := [][]loc{
 		{{8, "main.agoroutine"}},
 		{{9, "main.agoroutine"}},
@@ -917,7 +927,7 @@ func TestStacktraceGoroutine(t *testing.T) {
 		mainCount := 0
 
 		for i, g := range gs {
-			locations, err := g.Stacktrace(40)
+			locations, err := g.Stacktrace(40, false)
 			if err != nil {
 				// On windows we do not have frame information for goroutines doing system calls.
 				t.Logf("Could not retrieve goroutine stack for goid=%d: %v", g.ID, err)
@@ -971,7 +981,7 @@ func TestKill(t *testing.T) {
 		if err := p.Detach(true); err != nil {
 			t.Fatal(err)
 		}
-		if !p.Exited() {
+		if valid, _ := p.Valid(); valid {
 			t.Fatal("expected process to have exited")
 		}
 		if runtime.GOOS == "linux" {
@@ -1033,7 +1043,7 @@ func TestContinueMulti(t *testing.T) {
 		sayhiCount := 0
 		for {
 			err := proc.Continue(p)
-			if p.Exited() {
+			if valid, _ := p.Valid(); !valid {
 				break
 			}
 			assertNoError(err, t, "Continue()")
@@ -1065,7 +1075,7 @@ func TestProcessReceivesSIGCHLD(t *testing.T) {
 	protest.AllowRecording(t)
 	withTestProcess("sigchldprog", t, func(p proc.Process, fixture protest.Fixture) {
 		err := proc.Continue(p)
-		_, ok := err.(proc.ProcessExitedError)
+		_, ok := err.(proc.ErrProcessExited)
 		if !ok {
 			t.Fatalf("Continue() returned unexpected error type %v", err)
 		}
@@ -1234,13 +1244,13 @@ func TestFrameEvaluation(t *testing.T) {
 		found := make([]bool, 10)
 		for _, g := range gs {
 			frame := -1
-			frames, err := g.Stacktrace(10)
+			frames, err := g.Stacktrace(10, false)
 			if err != nil {
 				t.Logf("could not stacktrace goroutine %d: %v\n", g.ID, err)
 				continue
 			}
 			t.Logf("Goroutine %d", g.ID)
-			logStacktrace(t, frames)
+			logStacktrace(t, p.BinInfo(), frames)
 			for i := range frames {
 				if frames[i].Call.Fn != nil && frames[i].Call.Fn.Name == "main.agoroutine" {
 					frame = i
@@ -1253,7 +1263,7 @@ func TestFrameEvaluation(t *testing.T) {
 				continue
 			}
 
-			scope, err := proc.ConvertEvalScope(p, g.ID, frame)
+			scope, err := proc.ConvertEvalScope(p, g.ID, frame, 0)
 			assertNoError(err, t, "ConvertEvalScope()")
 			t.Logf("scope = %v", scope)
 			v, err := scope.EvalVariable("i", normalLoadConfig)
@@ -1278,7 +1288,7 @@ func TestFrameEvaluation(t *testing.T) {
 		assertNoError(err, t, "GetG()")
 
 		for i := 0; i <= 3; i++ {
-			scope, err := proc.ConvertEvalScope(p, g.ID, i+1)
+			scope, err := proc.ConvertEvalScope(p, g.ID, i+1, 0)
 			assertNoError(err, t, fmt.Sprintf("ConvertEvalScope() on frame %d", i+1))
 			v, err := scope.EvalVariable("n", normalLoadConfig)
 			assertNoError(err, t, fmt.Sprintf("EvalVariable() on frame %d", i+1))
@@ -1381,7 +1391,7 @@ func TestBreakpointCounts(t *testing.T) {
 
 		for {
 			if err := proc.Continue(p); err != nil {
-				if _, exited := err.(proc.ProcessExitedError); exited {
+				if _, exited := err.(proc.ErrProcessExited); exited {
 					break
 				}
 				assertNoError(err, t, "Continue()")
@@ -1433,7 +1443,7 @@ func TestBreakpointCountsWithDetection(t *testing.T) {
 
 		for {
 			if err := proc.Continue(p); err != nil {
-				if _, exited := err.(proc.ProcessExitedError); exited {
+				if _, exited := err.(proc.ErrProcessExited); exited {
 					break
 				}
 				assertNoError(err, t, "Continue()")
@@ -1512,10 +1522,7 @@ func BenchmarkGoroutinesInfo(b *testing.B) {
 	withTestProcess("testvariables2", b, func(p proc.Process, fixture protest.Fixture) {
 		assertNoError(proc.Continue(p), b, "Continue()")
 		for i := 0; i < b.N; i++ {
-			if p, ok := p.(proc.AllGCache); ok {
-				allgcache := p.AllGCache()
-				*allgcache = nil
-			}
+			p.Common().ClearAllGCache()
 			_, err := proc.GoroutinesInfo(p)
 			assertNoError(err, b, "GoroutinesInfo")
 		}
@@ -1536,7 +1543,7 @@ func TestIssue262(t *testing.T) {
 		if err == nil {
 			t.Fatalf("No error on second continue")
 		}
-		_, exited := err.(proc.ProcessExitedError)
+		_, exited := err.(proc.ErrProcessExited)
 		if !exited {
 			t.Fatalf("Process did not exit after second continue: %v", err)
 		}
@@ -1645,7 +1652,7 @@ func TestCondBreakpointError(t *testing.T) {
 
 		err = proc.Continue(p)
 		if err != nil {
-			if _, exited := err.(proc.ProcessExitedError); !exited {
+			if _, exited := err.(proc.ErrProcessExited); !exited {
 				t.Fatalf("Unexpected error on second Continue(): %v", err)
 			}
 		} else {
@@ -1785,7 +1792,7 @@ func TestIssue332_Part2(t *testing.T) {
 		assertNoError(proc.Next(p), t, "second Next()")
 		assertNoError(proc.Next(p), t, "third Next()")
 		err = proc.Continue(p)
-		if _, exited := err.(proc.ProcessExitedError); !exited {
+		if _, exited := err.(proc.ErrProcessExited); !exited {
 			assertNoError(err, t, "final Continue()")
 		}
 	})
@@ -1810,7 +1817,7 @@ func TestIssue414(t *testing.T) {
 		for {
 			err := proc.Step(p)
 			if err != nil {
-				if _, exited := err.(proc.ProcessExitedError); exited {
+				if _, exited := err.(proc.ErrProcessExited); exited {
 					break
 				}
 			}
@@ -1830,7 +1837,7 @@ func TestPackageVariables(t *testing.T) {
 		assertNoError(err, t, "PackageVariables()")
 		failed := false
 		for _, v := range vars {
-			if v.Unreadable != nil {
+			if v.Unreadable != nil && v.Unreadable.Error() != "no location attribute Location" {
 				failed = true
 				t.Logf("Unreadable variable %s: %v", v.Name, v.Unreadable)
 			}
@@ -1871,7 +1878,7 @@ func TestCmdLineArgs(t *testing.T) {
 		if bp.Breakpoint != nil && bp.Name == proc.UnrecoveredPanic {
 			t.Fatalf("testing args failed on unrecovered-panic breakpoint: %v", bp)
 		}
-		exit, exited := err.(proc.ProcessExitedError)
+		exit, exited := err.(proc.ErrProcessExited)
 		if !exited {
 			t.Fatalf("Process did not exit: %v", err)
 		} else {
@@ -1940,7 +1947,7 @@ func TestNextParked(t *testing.T) {
 		var parkedg *proc.G
 		for parkedg == nil {
 			err := proc.Continue(p)
-			if _, exited := err.(proc.ProcessExitedError); exited {
+			if _, exited := err.(proc.ErrProcessExited); exited {
 				t.Log("could not find parked goroutine")
 				return
 			}
@@ -1957,7 +1964,7 @@ func TestNextParked(t *testing.T) {
 				if g.Thread != nil {
 					continue
 				}
-				frames, _ := g.Stacktrace(5)
+				frames, _ := g.Stacktrace(5, false)
 				for _, frame := range frames {
 					// line 11 is the line where wg.Done is called
 					if frame.Current.Fn != nil && frame.Current.Fn.Name == "main.sayhi" && frame.Current.Line < 11 {
@@ -1992,7 +1999,7 @@ func TestStepParked(t *testing.T) {
 	LookForParkedG:
 		for {
 			err := proc.Continue(p)
-			if _, exited := err.(proc.ProcessExitedError); exited {
+			if _, exited := err.(proc.ErrProcessExited); exited {
 				t.Log("could not find parked goroutine")
 				return
 			}
@@ -2010,7 +2017,7 @@ func TestStepParked(t *testing.T) {
 		}
 
 		t.Logf("Parked g is: %v\n", parkedg)
-		frames, _ := parkedg.Stacktrace(20)
+		frames, _ := parkedg.Stacktrace(20, false)
 		for _, frame := range frames {
 			name := ""
 			if frame.Call.Fn != nil {
@@ -2036,14 +2043,23 @@ func TestIssue509(t *testing.T) {
 	cmd.Dir = nomaindir
 	assertNoError(cmd.Run(), t, "go build")
 	exepath := filepath.Join(nomaindir, "debug")
-	_, err := native.Launch([]string{exepath}, ".")
+	defer os.Remove(exepath)
+	var err error
+
+	switch testBackend {
+	case "native":
+		_, err = native.Launch([]string{exepath}, ".", false, []string{})
+	case "lldb":
+		_, err = gdbserial.LLDBLaunch([]string{exepath}, ".", false, []string{})
+	default:
+		t.Skip("test not valid for this backend")
+	}
 	if err == nil {
 		t.Fatalf("expected error but none was generated")
 	}
-	if err != proc.NotExecutableErr {
-		t.Fatalf("expected error \"%v\" got \"%v\"", proc.NotExecutableErr, err)
+	if err != proc.ErrNotExecutable {
+		t.Fatalf("expected error \"%v\" got \"%v\"", proc.ErrNotExecutable, err)
 	}
-	os.Remove(exepath)
 }
 
 func TestUnsupportedArch(t *testing.T) {
@@ -2070,9 +2086,19 @@ func TestUnsupportedArch(t *testing.T) {
 	}
 	defer os.Remove(outfile)
 
-	p, err := native.Launch([]string{outfile}, ".")
+	var p proc.Process
+
+	switch testBackend {
+	case "native":
+		p, err = native.Launch([]string{outfile}, ".", false, []string{})
+	case "lldb":
+		p, err = gdbserial.LLDBLaunch([]string{outfile}, ".", false, []string{})
+	default:
+		t.Skip("test not valid for this backend")
+	}
+
 	switch err {
-	case proc.UnsupportedLinuxArchErr, proc.UnsupportedWindowsArchErr, proc.UnsupportedDarwinArchErr:
+	case proc.ErrUnsupportedLinuxArch, proc.ErrUnsupportedWindowsArch, proc.ErrUnsupportedDarwinArch:
 		// all good
 	case nil:
 		p.Detach(true)
@@ -2125,11 +2151,19 @@ func TestNextPanicAndDirectCall(t *testing.T) {
 	// Next should not step into a deferred function if it is called
 	// directly, only if it is called through a panic or a deferreturn.
 	// Here we test the case where the function is called by a panic
-	testseq("defercall", contNext, []nextTest{
-		{15, 16},
-		{16, 17},
-		{17, 18},
-		{18, 5}}, "main.callAndPanic2", t)
+	if goversion.VersionAfterOrEqual(runtime.Version(), 1, 11) {
+		testseq("defercall", contNext, []nextTest{
+			{15, 16},
+			{16, 17},
+			{17, 18},
+			{18, 6}}, "main.callAndPanic2", t)
+	} else {
+		testseq("defercall", contNext, []nextTest{
+			{15, 16},
+			{16, 17},
+			{17, 18},
+			{18, 5}}, "main.callAndPanic2", t)
+	}
 }
 
 func TestStepCall(t *testing.T) {
@@ -2141,19 +2175,43 @@ func TestStepCall(t *testing.T) {
 func TestStepCallPtr(t *testing.T) {
 	// Tests that Step works correctly when calling functions with a
 	// function pointer.
-	testseq("teststepprog", contStep, []nextTest{
-		{9, 10},
-		{10, 5},
-		{5, 6},
-		{6, 7},
-		{7, 11}}, "", t)
+	if goversion.VersionAfterOrEqual(runtime.Version(), 1, 11) {
+		testseq("teststepprog", contStep, []nextTest{
+			{9, 10},
+			{10, 6},
+			{6, 7},
+			{7, 11}}, "", t)
+	} else {
+		testseq("teststepprog", contStep, []nextTest{
+			{9, 10},
+			{10, 5},
+			{5, 6},
+			{6, 7},
+			{7, 11}}, "", t)
+	}
 }
 
 func TestStepReturnAndPanic(t *testing.T) {
 	// Tests that Step works correctly when returning from functions
 	// and when a deferred function is called when panic'ing.
-	ver, _ := goversion.Parse(runtime.Version())
-	if ver.Major > 0 && ver.AfterOrEqual(goversion.GoVersion{1, 9, -1, 0, 0, ""}) && !ver.AfterOrEqual(goversion.GoVersion{1, 10, -1, 0, 0, ""}) {
+	switch {
+	case goversion.VersionAfterOrEqual(runtime.Version(), 1, 11):
+		testseq("defercall", contStep, []nextTest{
+			{17, 6},
+			{6, 7},
+			{7, 18},
+			{18, 6},
+			{6, 7}}, "", t)
+	case goversion.VersionAfterOrEqual(runtime.Version(), 1, 10):
+		testseq("defercall", contStep, []nextTest{
+			{17, 5},
+			{5, 6},
+			{6, 7},
+			{7, 18},
+			{18, 5},
+			{5, 6},
+			{6, 7}}, "", t)
+	case goversion.VersionAfterOrEqual(runtime.Version(), 1, 9):
 		testseq("defercall", contStep, []nextTest{
 			{17, 5},
 			{5, 6},
@@ -2163,8 +2221,7 @@ func TestStepReturnAndPanic(t *testing.T) {
 			{18, 5},
 			{5, 6},
 			{6, 7}}, "", t)
-
-	} else {
+	default:
 		testseq("defercall", contStep, []nextTest{
 			{17, 5},
 			{5, 6},
@@ -2179,25 +2236,47 @@ func TestStepReturnAndPanic(t *testing.T) {
 func TestStepDeferReturn(t *testing.T) {
 	// Tests that Step works correctly when a deferred function is
 	// called during a return.
-	testseq("defercall", contStep, []nextTest{
-		{11, 5},
-		{5, 6},
-		{6, 7},
-		{7, 12},
-		{12, 13},
-		{13, 5},
-		{5, 6},
-		{6, 7},
-		{7, 13},
-		{13, 28}}, "", t)
+	if goversion.VersionAfterOrEqual(runtime.Version(), 1, 11) {
+		testseq("defercall", contStep, []nextTest{
+			{11, 6},
+			{6, 7},
+			{7, 12},
+			{12, 13},
+			{13, 6},
+			{6, 7},
+			{7, 13},
+			{13, 28}}, "", t)
+	} else {
+		testseq("defercall", contStep, []nextTest{
+			{11, 5},
+			{5, 6},
+			{6, 7},
+			{7, 12},
+			{12, 13},
+			{13, 5},
+			{5, 6},
+			{6, 7},
+			{7, 13},
+			{13, 28}}, "", t)
+	}
 }
 
 func TestStepIgnorePrivateRuntime(t *testing.T) {
 	// Tests that Step will ignore calls to private runtime functions
 	// (such as runtime.convT2E in this case)
-	ver, _ := goversion.Parse(runtime.Version())
-
-	if ver.Major > 0 && ver.AfterOrEqual(goversion.GoVersion{1, 7, -1, 0, 0, ""}) && !ver.AfterOrEqual(goversion.GoVersion{1, 10, -1, 0, 0, ""}) {
+	switch {
+	case goversion.VersionAfterOrEqual(runtime.Version(), 1, 11):
+		testseq("teststepprog", contStep, []nextTest{
+			{21, 14},
+			{14, 15},
+			{15, 22}}, "", t)
+	case goversion.VersionAfterOrEqual(runtime.Version(), 1, 10):
+		testseq("teststepprog", contStep, []nextTest{
+			{21, 13},
+			{13, 14},
+			{14, 15},
+			{15, 22}}, "", t)
+	case goversion.VersionAfterOrEqual(runtime.Version(), 1, 7):
 		testseq("teststepprog", contStep, []nextTest{
 			{21, 13},
 			{13, 14},
@@ -2205,13 +2284,7 @@ func TestStepIgnorePrivateRuntime(t *testing.T) {
 			{15, 14},
 			{14, 17},
 			{17, 22}}, "", t)
-	} else if ver.Major < 0 || ver.AfterOrEqual(goversion.GoVersion{1, 10, -1, 0, 0, ""}) {
-		testseq("teststepprog", contStep, []nextTest{
-			{21, 13},
-			{13, 14},
-			{14, 15},
-			{15, 22}}, "", t)
-	} else {
+	default:
 		testseq("teststepprog", contStep, []nextTest{
 			{21, 13},
 			{13, 14},
@@ -2323,7 +2396,7 @@ func TestStepConcurrentPtr(t *testing.T) {
 		count := 0
 		for {
 			err := proc.Continue(p)
-			_, exited := err.(proc.ProcessExitedError)
+			_, exited := err.(proc.ErrProcessExited)
 			if exited {
 				break
 			}
@@ -2445,7 +2518,11 @@ func TestStepOnCallPtrInstr(t *testing.T) {
 
 		assertNoError(proc.Step(p), t, "Step()")
 
-		assertLineNumber(p, t, 5, "Step continued to wrong line,")
+		if goversion.VersionAfterOrEqual(runtime.Version(), 1, 11) {
+			assertLineNumber(p, t, 6, "Step continued to wrong line,")
+		} else {
+			assertLineNumber(p, t, 5, "Step continued to wrong line,")
+		}
 	})
 }
 
@@ -2484,9 +2561,15 @@ func TestStepOutPanicAndDirectCall(t *testing.T) {
 	// StepOut should not step into a deferred function if it is called
 	// directly, only if it is called through a panic.
 	// Here we test the case where the function is called by a panic
-	testseq2(t, "defercall", "", []seqTest{
-		{contContinue, 17},
-		{contStepout, 5}})
+	if goversion.VersionAfterOrEqual(runtime.Version(), 1, 11) {
+		testseq2(t, "defercall", "", []seqTest{
+			{contContinue, 17},
+			{contStepout, 6}})
+	} else {
+		testseq2(t, "defercall", "", []seqTest{
+			{contContinue, 17},
+			{contStepout, 5}})
+	}
 }
 
 func TestWorkDir(t *testing.T) {
@@ -2573,7 +2656,7 @@ func BenchmarkTrace(b *testing.B) {
 			assertNoError(proc.Continue(p), b, "Continue()")
 			s, err := proc.GoroutineScope(p.CurrentThread())
 			assertNoError(err, b, "Scope()")
-			_, err = s.FunctionArguments(proc.LoadConfig{false, 0, 64, 0, 3})
+			_, err = s.FunctionArguments(proc.LoadConfig{false, 0, 64, 0, 3, 0})
 			assertNoError(err, b, "FunctionArguments()")
 		}
 		b.StopTimer()
@@ -2588,9 +2671,21 @@ func TestNextInDeferReturn(t *testing.T) {
 	protest.AllowRecording(t)
 	withTestProcess("defercall", t, func(p proc.Process, fixture protest.Fixture) {
 		_, err := setFunctionBreakpoint(p, "runtime.deferreturn")
-		assertNoError(err, t, "setFunctionBreakpoint()")
+		assertNoError(err, t, "setFunctionBreakpoint(runtime.deferreturn)")
 		assertNoError(proc.Continue(p), t, "First Continue()")
+
+		// Set a breakpoint on the deferred function so that the following loop
+		// can not step out of the runtime.deferreturn and all the way to the
+		// point where the target program panics.
+		_, err = setFunctionBreakpoint(p, "main.sampleFunction")
+		assertNoError(err, t, "setFunctionBreakpoint(main.sampleFunction)")
 		for i := 0; i < 20; i++ {
+			loc, err := p.CurrentThread().Location()
+			assertNoError(err, t, "CurrentThread().Location()")
+			t.Logf("at %#x %s:%d", loc.PC, loc.File, loc.Line)
+			if loc.Fn != nil && loc.Fn.Name == "main.sampleFunction" {
+				break
+			}
 			assertNoError(proc.Next(p), t, fmt.Sprintf("Next() %d", i))
 		}
 	})
@@ -2629,7 +2724,7 @@ func TestStacktraceWithBarriers(t *testing.T) {
 		stackBarrierGoids := []int{}
 		for len(stackBarrierGoids) == 0 {
 			err := proc.Continue(p)
-			if _, exited := err.(proc.ProcessExitedError); exited {
+			if _, exited := err.(proc.ErrProcessExited); exited {
 				t.Logf("Could not run test")
 				return
 			}
@@ -2645,7 +2740,7 @@ func TestStacktraceWithBarriers(t *testing.T) {
 				goid, _ := constant.Int64Val(goidVar.Value)
 
 				if g := getg(int(goid), gs); g != nil {
-					stack, err := g.Stacktrace(50)
+					stack, err := g.Stacktrace(50, false)
 					assertNoError(err, t, fmt.Sprintf("Stacktrace(goroutine = %d)", goid))
 					for _, frame := range stack {
 						if frame.Current.Fn != nil && frame.Current.Fn.Name == "main.bottomUpTree" {
@@ -2671,7 +2766,7 @@ func TestStacktraceWithBarriers(t *testing.T) {
 		for _, goid := range stackBarrierGoids {
 			g := getg(goid, gs)
 
-			stack, err := g.Stacktrace(200)
+			stack, err := g.Stacktrace(200, false)
 			assertNoError(err, t, "Stacktrace()")
 
 			// Check that either main.main or main.main.func1 appear in the
@@ -2715,7 +2810,11 @@ func TestAttachDetach(t *testing.T) {
 	if testBackend == "rr" {
 		return
 	}
-	fixture := protest.BuildFixture("testnextnethttp", 0)
+	var buildFlags protest.BuildFlags
+	if buildMode == "pie" {
+		buildFlags |= protest.BuildModePIE
+	}
+	fixture := protest.BuildFixture("testnextnethttp", buildFlags)
 	cmd := exec.Command(fixture.Path)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -2740,13 +2839,13 @@ func TestAttachDetach(t *testing.T) {
 
 	switch testBackend {
 	case "native":
-		p, err = native.Attach(cmd.Process.Pid)
+		p, err = native.Attach(cmd.Process.Pid, []string{})
 	case "lldb":
 		path := ""
 		if runtime.GOOS == "darwin" {
 			path = fixture.Path
 		}
-		p, err = gdbserial.LLDBAttach(cmd.Process.Pid, path)
+		p, err = gdbserial.LLDBAttach(cmd.Process.Pid, path, []string{})
 	default:
 		err = fmt.Errorf("unknown backend %q", testBackend)
 	}
@@ -2860,6 +2959,11 @@ func TestIssue877(t *testing.T) {
 	if runtime.GOOS != "darwin" && testBackend == "lldb" {
 		return
 	}
+	if os.Getenv("TRAVIS") == "true" && runtime.GOOS == "darwin" {
+		// Something changed on Travis side that makes the Go compiler fail if
+		// DYLD_LIBRARY_PATH is set.
+		t.Skip("broken")
+	}
 	const envval = "/usr/local/lib"
 	os.Setenv("DYLD_LIBRARY_PATH", envval)
 	withTestProcess("issue877", t, func(p proc.Process, fixture protest.Fixture) {
@@ -2883,16 +2987,16 @@ func TestIssue893(t *testing.T) {
 		if err == nil {
 			return
 		}
-		if _, ok := err.(*frame.NoFDEForPCError); ok {
+		if _, ok := err.(*frame.ErrNoFDEForPC); ok {
 			return
 		}
-		if _, ok := err.(proc.ThreadBlockedError); ok {
+		if _, ok := err.(proc.ErrThreadBlocked); ok {
 			return
 		}
-		if _, ok := err.(*proc.NoSourceForPCError); ok {
+		if _, ok := err.(*proc.ErrNoSourceForPC); ok {
 			return
 		}
-		if _, ok := err.(proc.ProcessExitedError); ok {
+		if _, ok := err.(proc.ErrProcessExited); ok {
 			return
 		}
 		assertNoError(err, t, "Next")
@@ -3009,6 +3113,9 @@ func TestAttachStripped(t *testing.T) {
 		t.Log("-s does not produce stripped executables on macOS")
 		return
 	}
+	if buildMode != "" {
+		t.Skip("not enabled with buildmode=PIE")
+	}
 	fixture := protest.BuildFixture("testnextnethttp", protest.LinkStrip)
 	cmd := exec.Command(fixture.Path)
 	cmd.Stdout = os.Stdout
@@ -3034,13 +3141,13 @@ func TestAttachStripped(t *testing.T) {
 
 	switch testBackend {
 	case "native":
-		p, err = native.Attach(cmd.Process.Pid)
+		p, err = native.Attach(cmd.Process.Pid, []string{})
 	case "lldb":
 		path := ""
 		if runtime.GOOS == "darwin" {
 			path = fixture.Path
 		}
-		p, err = gdbserial.LLDBAttach(cmd.Process.Pid, path)
+		p, err = gdbserial.LLDBAttach(cmd.Process.Pid, path, []string{})
 	default:
 		t.Fatalf("unknown backend %q", testBackend)
 	}
@@ -3073,7 +3180,7 @@ func TestIssue844(t *testing.T) {
 	})
 }
 
-func logStacktrace(t *testing.T, frames []proc.Stackframe) {
+func logStacktrace(t *testing.T, bi *proc.BinaryInfo, frames []proc.Stackframe) {
 	for j := range frames {
 		name := "?"
 		if frames[j].Current.Fn != nil {
@@ -3081,6 +3188,23 @@ func logStacktrace(t *testing.T, frames []proc.Stackframe) {
 		}
 
 		t.Logf("\t%#x %#x %#x %s at %s:%d\n", frames[j].Call.PC, frames[j].FrameOffset(), frames[j].FramePointerOffset(), name, filepath.Base(frames[j].Call.File), frames[j].Call.Line)
+		if frames[j].TopmostDefer != nil {
+			f, l, fn := bi.PCToLine(frames[j].TopmostDefer.DeferredPC)
+			fnname := ""
+			if fn != nil {
+				fnname = fn.Name
+			}
+			t.Logf("\t\ttopmost defer: %#x %s at %s:%d\n", frames[j].TopmostDefer.DeferredPC, fnname, f, l)
+		}
+		for deferIdx, _defer := range frames[j].Defers {
+			f, l, fn := bi.PCToLine(_defer.DeferredPC)
+			fnname := ""
+			if fn != nil {
+				fnname = fn.Name
+			}
+			t.Logf("\t\t%d defer: %#x %s at %s:%d\n", deferIdx, _defer.DeferredPC, fnname, f, l)
+
+		}
 	}
 }
 
@@ -3191,11 +3315,11 @@ func TestCgoStacktrace(t *testing.T) {
 				}
 			}
 
-			frames, err := g.Stacktrace(100)
+			frames, err := g.Stacktrace(100, false)
 			assertNoError(err, t, fmt.Sprintf("Stacktrace at iteration step %d", itidx))
 
 			t.Logf("iteration step %d", itidx)
-			logStacktrace(t, frames)
+			logStacktrace(t, p.BinInfo(), frames)
 
 			m := stacktraceCheck(t, tc, frames)
 			mismatch := (m == nil)
@@ -3232,7 +3356,7 @@ func TestCgoStacktrace(t *testing.T) {
 					if frames[j].Current.File != threadFrames[j].Current.File || frames[j].Current.Line != threadFrames[j].Current.Line {
 						t.Logf("stack mismatch between goroutine stacktrace and thread stacktrace")
 						t.Logf("thread stacktrace:")
-						logStacktrace(t, threadFrames)
+						logStacktrace(t, p.BinInfo(), threadFrames)
 						mismatch = true
 						break
 					}
@@ -3279,10 +3403,10 @@ func TestSystemstackStacktrace(t *testing.T) {
 		assertNoError(proc.Continue(p), t, "second continue")
 		g, err := proc.GetG(p.CurrentThread())
 		assertNoError(err, t, "GetG")
-		frames, err := g.Stacktrace(100)
+		frames, err := g.Stacktrace(100, false)
 		assertNoError(err, t, "stacktrace")
-		logStacktrace(t, frames)
-		m := stacktraceCheck(t, []string{"!runtime.startpanic_m", "runtime.startpanic", "main.main"}, frames)
+		logStacktrace(t, p.BinInfo(), frames)
+		m := stacktraceCheck(t, []string{"!runtime.startpanic_m", "runtime.gopanic", "main.main"}, frames)
 		if m == nil {
 			t.Fatal("see previous loglines")
 		}
@@ -3314,9 +3438,9 @@ func TestSystemstackOnRuntimeNewstack(t *testing.T) {
 				break
 			}
 		}
-		frames, err := g.Stacktrace(100)
+		frames, err := g.Stacktrace(100, false)
 		assertNoError(err, t, "stacktrace")
-		logStacktrace(t, frames)
+		logStacktrace(t, p.BinInfo(), frames)
 		m := stacktraceCheck(t, []string{"!runtime.newstack", "main.main"}, frames)
 		if m == nil {
 			t.Fatal("see previous loglines")
@@ -3331,9 +3455,9 @@ func TestIssue1034(t *testing.T) {
 		_, err := setFunctionBreakpoint(p, "main.main")
 		assertNoError(err, t, "setFunctionBreakpoint()")
 		assertNoError(proc.Continue(p), t, "Continue()")
-		frames, err := p.SelectedGoroutine().Stacktrace(10)
+		frames, err := p.SelectedGoroutine().Stacktrace(10, false)
 		assertNoError(err, t, "Stacktrace")
-		scope := proc.FrameToScope(p.BinInfo(), p.CurrentThread(), nil, frames[2])
+		scope := proc.FrameToScope(p.BinInfo(), p.CurrentThread(), nil, frames[2:]...)
 		args, _ := scope.FunctionArguments(normalLoadConfig)
 		assertNoError(err, t, "FunctionArguments()")
 		if len(args) > 0 {
@@ -3428,7 +3552,7 @@ func TestIssue1101(t *testing.T) {
 			lastCmd = "final Continue()"
 			exitErr = proc.Continue(p)
 		}
-		if pexit, exited := exitErr.(proc.ProcessExitedError); exited {
+		if pexit, exited := exitErr.(proc.ErrProcessExited); exited {
 			if pexit.Status != 2 && testBackend != "lldb" {
 				// looks like there's a bug with debugserver on macOS that sometimes
 				// will report exit status 0 instead of the proper exit status.
@@ -3549,6 +3673,7 @@ func TestInlinedStacktraceAndVariables(t *testing.T) {
 			t.Fatalf("expected at least two locations for %s:%d (got %d: %#x)", fixture.Source, 6, len(pcs), pcs)
 		}
 		for _, pc := range pcs {
+			t.Logf("setting breakpoint at %#x\n", pc)
 			_, err := p.SetBreakpoint(pc, proc.UserBreakpoint, nil)
 			assertNoError(err, t, fmt.Sprintf("SetBreakpoint(%#x)", pc))
 		}
@@ -3559,7 +3684,7 @@ func TestInlinedStacktraceAndVariables(t *testing.T) {
 		assertNoError(err, t, "ThreadStacktrace")
 		t.Logf("Stacktrace:\n")
 		for i := range frames {
-			t.Logf("\t%s at %s:%d\n", frames[i].Call.Fn.Name, frames[i].Call.File, frames[i].Call.Line)
+			t.Logf("\t%s at %s:%d (%#x)\n", frames[i].Call.Fn.Name, frames[i].Call.File, frames[i].Call.Line, frames[i].Current.PC)
 		}
 
 		if err := checkFrame(frames[0], "main.inlineThis", fixture.Source, 7, true); err != nil {
@@ -3586,7 +3711,7 @@ func TestInlinedStacktraceAndVariables(t *testing.T) {
 		assertNoError(err, t, "ThreadStacktrace (2)")
 		t.Logf("Stacktrace 2:\n")
 		for i := range frames {
-			t.Logf("\t%s at %s:%d\n", frames[i].Call.Fn.Name, frames[i].Call.File, frames[i].Call.Line)
+			t.Logf("\t%s at %s:%d (%#x)\n", frames[i].Call.Fn.Name, frames[i].Call.File, frames[i].Call.Line, frames[i].Current.PC)
 		}
 
 		if err := checkFrame(frames[0], "main.inlineThis", fixture.Source, 7, true); err != nil {
@@ -3647,8 +3772,6 @@ func TestInlineStepOver(t *testing.T) {
 	}
 	testseq2Args(".", []string{}, protest.EnableInlining, t, "testinline", "", []seqTest{
 		{contContinue, 18},
-		{contNext, 18},
-		{contNext, 19},
 		{contNext, 19},
 		{contNext, 20},
 	})
@@ -3663,5 +3786,318 @@ func TestInlineStepOut(t *testing.T) {
 		{contContinue, 18},
 		{contStep, 6},
 		{contStepout, 18},
+	})
+}
+
+func TestInlineFunctionList(t *testing.T) {
+	// We should be able to list all functions, even inlined ones.
+	if ver, _ := goversion.Parse(runtime.Version()); ver.Major >= 0 && !ver.AfterOrEqual(goversion.GoVersion{1, 10, -1, 0, 0, ""}) {
+		// Versions of go before 1.10 do not have DWARF information for inlined calls
+		t.Skip("inlining not supported")
+	}
+	withTestProcessArgs("testinline", t, ".", []string{}, protest.EnableInlining|protest.EnableOptimization, func(p proc.Process, fixture protest.Fixture) {
+		var found bool
+		for _, fn := range p.BinInfo().Functions {
+			if strings.Contains(fn.Name, "inlineThis") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatal("inline function not returned")
+		}
+	})
+}
+
+func TestInlineBreakpoint(t *testing.T) {
+	// We should be able to set a breakpoint on the call site of an inlined function.
+	if ver, _ := goversion.Parse(runtime.Version()); ver.Major >= 0 && !ver.AfterOrEqual(goversion.GoVersion{1, 10, -1, 0, 0, ""}) {
+		// Versions of go before 1.10 do not have DWARF information for inlined calls
+		t.Skip("inlining not supported")
+	}
+	withTestProcessArgs("testinline", t, ".", []string{}, protest.EnableInlining|protest.EnableOptimization, func(p proc.Process, fixture protest.Fixture) {
+		pc, fn, err := p.BinInfo().LineToPC(fixture.Source, 17)
+		if pc == 0 {
+			t.Fatal("unable to get PC for inlined function call")
+		}
+		expectedFn := "main.main"
+		if fn.Name != expectedFn {
+			t.Fatalf("incorrect function returned, expected %s, got %s", expectedFn, fn.Name)
+		}
+		_, err = p.SetBreakpoint(pc, proc.UserBreakpoint, nil)
+		if err != nil {
+			t.Fatalf("unable to set breakpoint: %v", err)
+		}
+	})
+}
+
+func TestIssue951(t *testing.T) {
+	if ver, _ := goversion.Parse(runtime.Version()); ver.Major >= 0 && !ver.AfterOrEqual(goversion.GoVersion{1, 9, -1, 0, 0, ""}) {
+		t.Skip("scopes not implemented in <=go1.8")
+	}
+
+	withTestProcess("issue951", t, func(p proc.Process, fixture protest.Fixture) {
+		assertNoError(proc.Continue(p), t, "Continue()")
+		scope, err := proc.GoroutineScope(p.CurrentThread())
+		assertNoError(err, t, "GoroutineScope")
+		args, err := scope.FunctionArguments(normalLoadConfig)
+		assertNoError(err, t, "FunctionArguments")
+		t.Logf("%#v", args[0])
+		if args[0].Flags&proc.VariableShadowed == 0 {
+			t.Error("argument is not shadowed")
+		}
+		vars, err := scope.LocalVariables(normalLoadConfig)
+		assertNoError(err, t, "LocalVariables")
+		shadowed, notShadowed := 0, 0
+		for i := range vars {
+			t.Logf("var %d: %#v\n", i, vars[i])
+			if vars[i].Flags&proc.VariableShadowed != 0 {
+				shadowed++
+			} else {
+				notShadowed++
+			}
+		}
+		if shadowed != 1 || notShadowed != 1 {
+			t.Errorf("Wrong number of shadowed/non-shadowed local variables: %d %d", shadowed, notShadowed)
+		}
+	})
+}
+
+func TestDWZCompression(t *testing.T) {
+	// If dwz is not available in the system, skip this test
+	if _, err := exec.LookPath("dwz"); err != nil {
+		t.Skip("dwz not installed")
+	}
+
+	withTestProcessArgs("dwzcompression", t, ".", []string{}, protest.EnableDWZCompression, func(p proc.Process, fixture protest.Fixture) {
+		_, err := setFunctionBreakpoint(p, "C.fortytwo")
+		assertNoError(err, t, "setFunctionBreakpoint()")
+		assertNoError(proc.Continue(p), t, "first Continue()")
+		val := evalVariable(p, t, "stdin")
+		if val.RealType == nil {
+			t.Errorf("Can't find type for \"stdin\" global variable")
+		}
+	})
+}
+
+func TestMapLoadConfigWithReslice(t *testing.T) {
+	// Check that load configuration is respected for resliced maps.
+	withTestProcess("testvariables2", t, func(p proc.Process, fixture protest.Fixture) {
+		zolotovLoadCfg := proc.LoadConfig{FollowPointers: true, MaxStructFields: -1, MaxVariableRecurse: 3, MaxStringLen: 10, MaxArrayValues: 10}
+		assertNoError(proc.Continue(p), t, "First Continue()")
+		scope, err := proc.GoroutineScope(p.CurrentThread())
+		assertNoError(err, t, "GoroutineScope")
+		m1, err := scope.EvalExpression("m1", zolotovLoadCfg)
+		assertNoError(err, t, "EvalVariable")
+		t.Logf("m1 returned children %d (%d)", len(m1.Children)/2, m1.Len)
+
+		expr := fmt.Sprintf("(*(*%q)(%d))[10:]", m1.DwarfType.String(), m1.Addr)
+		t.Logf("expr %q\n", expr)
+
+		m1cont, err := scope.EvalExpression(expr, zolotovLoadCfg)
+		assertNoError(err, t, "EvalVariable")
+
+		t.Logf("m1cont returned children %d", len(m1cont.Children)/2)
+
+		if len(m1cont.Children) != 20 {
+			t.Fatalf("wrong number of children returned %d\n", len(m1cont.Children)/2)
+		}
+	})
+}
+
+func TestStepOutReturn(t *testing.T) {
+	ver, _ := goversion.Parse(runtime.Version())
+	if ver.Major >= 0 && !ver.AfterOrEqual(goversion.GoVersion{1, 10, -1, 0, 0, ""}) {
+		t.Skip("return variables aren't marked on 1.9 or earlier")
+	}
+	withTestProcess("stepoutret", t, func(p proc.Process, fixture protest.Fixture) {
+		_, err := setFunctionBreakpoint(p, "main.stepout")
+		assertNoError(err, t, "SetBreakpoint")
+		assertNoError(proc.Continue(p), t, "Continue")
+		assertNoError(proc.StepOut(p), t, "StepOut")
+		ret := p.CurrentThread().Common().ReturnValues(normalLoadConfig)
+		if len(ret) != 2 {
+			t.Fatalf("wrong number of return values %v", ret)
+		}
+
+		if ret[0].Name != "str" {
+			t.Fatalf("(str) bad return value name %s", ret[0].Name)
+		}
+		if ret[0].Kind != reflect.String {
+			t.Fatalf("(str) bad return value kind %v", ret[0].Kind)
+		}
+		if s := constant.StringVal(ret[0].Value); s != "return 47" {
+			t.Fatalf("(str) bad return value %q", s)
+		}
+
+		if ret[1].Name != "num" {
+			t.Fatalf("(num) bad return value name %s", ret[1].Name)
+		}
+		if ret[1].Kind != reflect.Int {
+			t.Fatalf("(num) bad return value kind %v", ret[1].Kind)
+		}
+		if n, _ := constant.Int64Val(ret[1].Value); n != 48 {
+			t.Fatalf("(num) bad return value %d", n)
+		}
+	})
+}
+
+func TestOptimizationCheck(t *testing.T) {
+	withTestProcess("continuetestprog", t, func(p proc.Process, fixture protest.Fixture) {
+		fn := p.BinInfo().LookupFunc["main.main"]
+		if fn.Optimized() {
+			t.Fatalf("main.main is optimized")
+		}
+	})
+
+	if goversion.VersionAfterOrEqual(runtime.Version(), 1, 10) {
+		withTestProcessArgs("continuetestprog", t, ".", []string{}, protest.EnableOptimization|protest.EnableInlining, func(p proc.Process, fixture protest.Fixture) {
+			fn := p.BinInfo().LookupFunc["main.main"]
+			if !fn.Optimized() {
+				t.Fatalf("main.main is not optimized")
+			}
+		})
+	}
+}
+
+func TestIssue1264(t *testing.T) {
+	// It should be possible to set a breakpoint condition that consists only
+	// of evaluating a single boolean variable.
+	withTestProcess("issue1264", t, func(p proc.Process, fixture protest.Fixture) {
+		bp := setFileBreakpoint(p, t, fixture, 8)
+		bp.Cond = &ast.Ident{Name: "equalsTwo"}
+		assertNoError(proc.Continue(p), t, "Continue()")
+		assertLineNumber(p, t, 8, "after continue")
+	})
+}
+
+func TestReadDefer(t *testing.T) {
+	withTestProcess("deferstack", t, func(p proc.Process, fixture protest.Fixture) {
+		assertNoError(proc.Continue(p), t, "Continue")
+		frames, err := p.SelectedGoroutine().Stacktrace(10, true)
+		assertNoError(err, t, "Stacktrace")
+
+		logStacktrace(t, p.BinInfo(), frames)
+
+		examples := []struct {
+			frameIdx     int
+			topmostDefer string
+			defers       []string
+		}{
+			// main.call3 (defers nothing, topmost defer main.f2)
+			{0, "main.f2", []string{}},
+
+			// main.call2 (defers main.f2, main.f3, topmost defer main.f2)
+			{1, "main.f2", []string{"main.f2", "main.f3"}},
+
+			// main.call1 (defers main.f1, main.f2, topmost defer main.f1)
+			{2, "main.f1", []string{"main.f1", "main.f2"}},
+
+			// main.main (defers nothing)
+			{3, "", []string{}}}
+
+		defercheck := func(d *proc.Defer, deferName, tgt string, frameIdx int) {
+			if d == nil {
+				t.Fatalf("expected %q as %s of frame %d, got nothing", tgt, deferName, frameIdx)
+			}
+			if d.Unreadable != nil {
+				t.Fatalf("expected %q as %s of frame %d, got unreadable defer: %v", tgt, deferName, frameIdx, d.Unreadable)
+			}
+			_, _, dfn := p.BinInfo().PCToLine(d.DeferredPC)
+			if dfn == nil {
+				t.Fatalf("expected %q as %s of frame %d, got %#x", tgt, deferName, frameIdx, d.DeferredPC)
+			}
+			if dfn.Name != tgt {
+				t.Fatalf("expected %q as %s of frame %d, got %q", tgt, deferName, frameIdx, dfn.Name)
+			}
+		}
+
+		for _, example := range examples {
+			frame := &frames[example.frameIdx]
+
+			if example.topmostDefer != "" {
+				defercheck(frame.TopmostDefer, "topmost defer", example.topmostDefer, example.frameIdx)
+			}
+
+			if len(example.defers) != len(frames[example.frameIdx].Defers) {
+				t.Fatalf("expected %d defers for %d, got %v", len(example.defers), example.frameIdx, frame.Defers)
+			}
+
+			for deferIdx := range example.defers {
+				defercheck(frame.Defers[deferIdx], fmt.Sprintf("defer %d", deferIdx), example.defers[deferIdx], example.frameIdx)
+			}
+		}
+	})
+}
+
+func TestNextUnknownInstr(t *testing.T) {
+	if !goversion.VersionAfterOrEqual(runtime.Version(), 1, 10) {
+		t.Skip("versions of Go before 1.10 can't assemble the instruction VPUNPCKLWD")
+	}
+	withTestProcess("nodisasm/", t, func(p proc.Process, fixture protest.Fixture) {
+		_, err := setFunctionBreakpoint(p, "main.asmFunc")
+		assertNoError(err, t, "setFunctionBreakpoint()")
+		assertNoError(proc.Continue(p), t, "Continue()")
+		assertNoError(proc.Next(p), t, "Next()")
+	})
+}
+
+func TestReadDeferArgs(t *testing.T) {
+	var tests = []struct {
+		frame, deferCall int
+		a, b             int64
+	}{
+		{1, 1, 42, 61},
+		{2, 2, 1, -1},
+	}
+
+	withTestProcess("deferstack", t, func(p proc.Process, fixture protest.Fixture) {
+		assertNoError(proc.Continue(p), t, "Continue()")
+
+		for _, test := range tests {
+			scope, err := proc.ConvertEvalScope(p, -1, test.frame, test.deferCall)
+			assertNoError(err, t, fmt.Sprintf("ConvertEvalScope(-1, %d, %d)", test.frame, test.deferCall))
+
+			if scope.Fn.Name != "main.f2" {
+				t.Fatalf("expected function \"main.f2\" got %q", scope.Fn.Name)
+			}
+
+			avar, err := scope.EvalVariable("a", normalLoadConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bvar, err := scope.EvalVariable("b", normalLoadConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			a, _ := constant.Int64Val(avar.Value)
+			b, _ := constant.Int64Val(bvar.Value)
+
+			if a != test.a {
+				t.Errorf("value of argument 'a' at frame %d, deferred call %d: %d (expected %d)", test.frame, test.deferCall, a, test.a)
+			}
+
+			if b != test.b {
+				t.Errorf("value of argument 'b' at frame %d, deferred call %d: %d (expected %d)", test.frame, test.deferCall, b, test.b)
+			}
+		}
+	})
+}
+
+func TestIssue1374(t *testing.T) {
+	// Continue did not work when stopped at a breakpoint immediately after calling CallFunction.
+	protest.MustSupportFunctionCalls(t, testBackend)
+	withTestProcess("issue1374", t, func(p proc.Process, fixture protest.Fixture) {
+		setFileBreakpoint(p, t, fixture, 7)
+		assertNoError(proc.Continue(p), t, "First Continue")
+		assertLineNumber(p, t, 7, "Did not continue to correct location (first continue),")
+		assertNoError(proc.CallFunction(p, "getNum()", &normalLoadConfig, true), t, "Call")
+		err := proc.Continue(p)
+		if _, isexited := err.(proc.ErrProcessExited); !isexited {
+			regs, _ := p.CurrentThread().Registers(false)
+			f, l, _ := p.BinInfo().PCToLine(regs.PC())
+			t.Fatalf("expected process exited error got %v at %s:%d", err, f, l)
+		}
 	})
 }

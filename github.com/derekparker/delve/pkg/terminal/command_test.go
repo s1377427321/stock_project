@@ -9,12 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/derekparker/delve/pkg/config"
+	"github.com/derekparker/delve/pkg/goversion"
 	"github.com/derekparker/delve/pkg/proc/test"
 	"github.com/derekparker/delve/service"
 	"github.com/derekparker/delve/service/api"
@@ -22,18 +24,18 @@ import (
 	"github.com/derekparker/delve/service/rpccommon"
 )
 
-var testBackend string
+var testBackend, buildMode string
 
 func TestMain(m *testing.M) {
 	flag.StringVar(&testBackend, "backend", "", "selects backend")
+	flag.StringVar(&buildMode, "test-buildmode", "", "selects build mode")
 	flag.Parse()
-	if testBackend == "" {
-		testBackend = os.Getenv("PROCTEST")
-		if testBackend == "" {
-			testBackend = "native"
-		}
+	test.DefaultTestBackend(&testBackend)
+	if buildMode != "" && buildMode != "pie" {
+		fmt.Fprintf(os.Stderr, "unknown build mode %q", buildMode)
+		os.Exit(1)
 	}
-	os.Exit(m.Run())
+	os.Exit(test.RunTestsWithFixtures(m))
 }
 
 type FakeTerminal struct {
@@ -94,6 +96,10 @@ func (ft *FakeTerminal) AssertExecError(cmdstr, tgterr string) {
 }
 
 func withTestTerminal(name string, t testing.TB, fn func(*FakeTerminal)) {
+	withTestTerminalBuildFlags(name, t, 0, fn)
+}
+
+func withTestTerminalBuildFlags(name string, t testing.TB, buildFlags test.BuildFlags, fn func(*FakeTerminal)) {
 	if testBackend == "rr" {
 		test.MustHaveRecordingAllowed(t)
 	}
@@ -103,11 +109,14 @@ func withTestTerminal(name string, t testing.TB, fn func(*FakeTerminal)) {
 		t.Fatalf("couldn't start listener: %s\n", err)
 	}
 	defer listener.Close()
+	if buildMode == "pie" {
+		buildFlags |= test.BuildModePIE
+	}
 	server := rpccommon.NewServer(&service.Config{
 		Listener:    listener,
-		ProcessArgs: []string{test.BuildFixture(name, 0).Path},
+		ProcessArgs: []string{test.BuildFixture(name, buildFlags).Path},
 		Backend:     testBackend,
-	}, false)
+	})
 	if err := server.Run(); err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +227,7 @@ func TestExecuteFile(t *testing.T) {
 
 func TestIssue354(t *testing.T) {
 	printStack([]api.Stackframe{}, "", false)
-	printStack([]api.Stackframe{{api.Location{PC: 0, File: "irrelevant.go", Line: 10, Function: nil}, nil, nil, 0, 0, ""}}, "", false)
+	printStack([]api.Stackframe{{api.Location{PC: 0, File: "irrelevant.go", Line: 10, Function: nil}, nil, nil, 0, 0, nil, true, ""}}, "", false)
 }
 
 func TestIssue411(t *testing.T) {
@@ -780,6 +789,61 @@ func TestPrintContextParkedGoroutine(t *testing.T) {
 		t.Logf("list -> %q", listout)
 		if strings.Contains(listout[0], "stacktraceme") {
 			t.Fatal("bad output for list command on a parked goroutine")
+		}
+	})
+}
+
+func TestStepOutReturn(t *testing.T) {
+	ver, _ := goversion.Parse(runtime.Version())
+	if ver.Major >= 0 && !ver.AfterOrEqual(goversion.GoVersion{1, 10, -1, 0, 0, ""}) {
+		t.Skip("return variables aren't marked on 1.9 or earlier")
+	}
+	withTestTerminal("stepoutret", t, func(term *FakeTerminal) {
+		term.MustExec("break main.stepout")
+		term.MustExec("continue")
+		out := term.MustExec("stepout")
+		t.Logf("output: %q", out)
+		if !strings.Contains(out, "num: ") || !strings.Contains(out, "str: ") {
+			t.Fatal("could not find parameter")
+		}
+	})
+}
+
+func TestOptimizationCheck(t *testing.T) {
+	withTestTerminal("continuetestprog", t, func(term *FakeTerminal) {
+		term.MustExec("break main.main")
+		out := term.MustExec("continue")
+		t.Logf("output %q", out)
+		if strings.Contains(out, optimizedFunctionWarning) {
+			t.Fatal("optimized function warning")
+		}
+	})
+
+	if goversion.VersionAfterOrEqual(runtime.Version(), 1, 10) {
+		withTestTerminalBuildFlags("continuetestprog", t, test.EnableOptimization|test.EnableInlining, func(term *FakeTerminal) {
+			term.MustExec("break main.main")
+			out := term.MustExec("continue")
+			t.Logf("output %q", out)
+			if !strings.Contains(out, optimizedFunctionWarning) {
+				t.Fatal("optimized function warning missing")
+			}
+		})
+	}
+}
+
+func TestTruncateStacktrace(t *testing.T) {
+	withTestTerminal("stacktraceprog", t, func(term *FakeTerminal) {
+		term.MustExec("break main.stacktraceme")
+		term.MustExec("continue")
+		out1 := term.MustExec("stack")
+		t.Logf("untruncated output %q", out1)
+		if strings.Contains(out1, stacktraceTruncatedMessage) {
+			t.Fatalf("stacktrace was truncated")
+		}
+		out2 := term.MustExec("stack 1")
+		t.Logf("truncated output %q", out2)
+		if !strings.Contains(out2, stacktraceTruncatedMessage) {
+			t.Fatalf("stacktrace was not truncated")
 		}
 	})
 }

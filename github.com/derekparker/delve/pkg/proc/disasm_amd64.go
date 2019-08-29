@@ -8,19 +8,19 @@ import (
 
 var maxInstructionLength uint64 = 15
 
-type ArchInst x86asm.Inst
+type archInst x86asm.Inst
 
-func asmDecode(mem []byte, pc uint64) (*ArchInst, error) {
+func asmDecode(mem []byte, pc uint64) (*archInst, error) {
 	inst, err := x86asm.Decode(mem, 64)
 	if err != nil {
 		return nil, err
 	}
 	patchPCRel(pc, &inst)
-	r := ArchInst(inst)
+	r := archInst(inst)
 	return &r, nil
 }
 
-func (inst *ArchInst) Size() int {
+func (inst *archInst) Size() int {
 	return inst.Len
 }
 
@@ -34,6 +34,8 @@ func patchPCRel(pc uint64, inst *x86asm.Inst) {
 	}
 }
 
+// Text will return the assembly instructions in human readable format according to
+// the flavour specified.
 func (inst *AsmInstruction) Text(flavour AssemblyFlavour, bi *BinaryInfo) string {
 	if inst.Inst == nil {
 		return "?"
@@ -55,11 +57,23 @@ func (inst *AsmInstruction) Text(flavour AssemblyFlavour, bi *BinaryInfo) string
 	return text
 }
 
+// IsCall returns true if the instruction is a CALL or LCALL instruction.
 func (inst *AsmInstruction) IsCall() bool {
+	if inst.Inst == nil {
+		return false
+	}
 	return inst.Inst.Op == x86asm.CALL || inst.Inst.Op == x86asm.LCALL
 }
 
-func resolveCallArg(inst *ArchInst, currentGoroutine bool, regs Registers, mem MemoryReadWriter, bininfo *BinaryInfo) *Location {
+// IsRet returns true if the instruction is a RET or LRET instruction.
+func (inst *AsmInstruction) IsRet() bool {
+	if inst.Inst == nil {
+		return false
+	}
+	return inst.Inst.Op == x86asm.RET || inst.Inst.Op == x86asm.LRET
+}
+
+func resolveCallArg(inst *archInst, currentGoroutine bool, regs Registers, mem MemoryReadWriter, bininfo *BinaryInfo) *Location {
 	if inst.Op != x86asm.CALL && inst.Op != x86asm.LCALL {
 		return nil
 	}
@@ -136,9 +150,12 @@ func init() {
 	}
 }
 
-// FirstPCAfterPrologue returns the address of the first instruction after the prologue for function fn
-// If sameline is set FirstPCAfterPrologue will always return an address associated with the same line as fn.Entry
-func FirstPCAfterPrologue(p Process, fn *Function, sameline bool) (uint64, error) {
+// firstPCAfterPrologueDisassembly returns the address of the first
+// instruction after the prologue for function fn by disassembling fn and
+// matching the instructions against known split-stack prologue patterns.
+// If sameline is set firstPCAfterPrologueDisassembly will always return an
+// address associated with the same line as fn.Entry
+func firstPCAfterPrologueDisassembly(p Process, fn *Function, sameline bool) (uint64, error) {
 	var mem MemoryReadWriter = p.CurrentThread()
 	breakpoints := p.Breakpoints()
 	bi := p.BinInfo()

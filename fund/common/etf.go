@@ -5,8 +5,9 @@ import (
 	"math"
 	. "fund/common/structs"
 	"github.com/go-xorm/xorm"
-		"github.com/astaxie/beego/logs"
+	"github.com/astaxie/beego/logs"
 	"common"
+	_ "github.com/go-sql-driver/mysql"
 )
 
 //获取数据库表buy_statics数据，整理出投资金额
@@ -29,7 +30,7 @@ func GetDealBuyStaticsInfos() {
 	for _, v := range result {
 		newCf := &BuyStaticsInfo{}
 
-		common.DataToStruct(v,newCf)
+		common.DataToStruct(v, newCf)
 
 		logs.Info(newCf)
 
@@ -137,6 +138,21 @@ func DealProfitabilityRate(v *BuyStaticsInfo) {
 	if v.FirstProfitabilityRate <= 0.01 {
 		return
 	}
+
+	//获取当前股票代码
+	codeByte := []byte(v.Code)
+	first := codeByte[0]
+	if first == []byte("6")[0] || first == []byte("5")[0] {
+		v.Code = "sh" + v.Code
+	} else if first == []byte("0")[0] {
+		v.Code = "sz" + v.Code
+	}
+
+	currentPrice, err := common.GetPriceFromUrlSZSH(v.Code)
+	if err != nil {
+		panic(err)
+	}
+
 	var coefficient float64
 	if v.CurrentProfitabilityRate > v.FirstProfitabilityRate {
 		coefficient = math.Pow(v.CurrentProfitabilityRate/v.FirstProfitabilityRate, v.SecondPower)
@@ -145,7 +161,13 @@ func DealProfitabilityRate(v *BuyStaticsInfo) {
 	}
 	buyMoney := v.FixedInvestmentMoney * coefficient
 
-	showPrint := fmt.Sprintf("%s %s 买入金额：%v,开方：%v,买入的盈利收益率：%v,当前盈利收益率：%v，现在买入金额：%v,", v.CodeName, v.Code, v.FixedInvestmentMoney,v.SecondPower,
-		v.FirstProfitabilityRate, v.CurrentProfitabilityRate, buyMoney)
+	//计算买的股票数量
+	buyMuch := math.Ceil(buyMoney / currentPrice)
+	buyMuch = float64(int(buyMuch) / 100 * 100)
+	speedMoney:=buyMuch*currentPrice
+
+
+	showPrint := fmt.Sprintf("%s %s 买入金额：%v,开方：%v,买入的盈利收益率：%v,当前盈利收益率：%v，现在买入金额：%v,买入的份数：%v", v.CodeName, v.Code, v.FixedInvestmentMoney, v.SecondPower,
+		v.FirstProfitabilityRate, v.CurrentProfitabilityRate, speedMoney, buyMuch)
 	fmt.Println(showPrint)
 }

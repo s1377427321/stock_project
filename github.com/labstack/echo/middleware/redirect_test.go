@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/labstack/echo"
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -75,7 +75,7 @@ func redirectTest(fn middlewareGenerator, host string, header http.Header) *http
 	next := func(c echo.Context) (err error) {
 		return c.NoContent(http.StatusOK)
 	}
-	req := httptest.NewRequest(echo.GET, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = host
 	if header != nil {
 		req.Header = header

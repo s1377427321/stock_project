@@ -4,6 +4,7 @@ import (
 	"debug/dwarf"
 	"errors"
 	"fmt"
+	"go/constant"
 	"strings"
 
 	"github.com/derekparker/delve/pkg/dwarf/frame"
@@ -46,6 +47,8 @@ type Stackframe struct {
 	SystemStack bool
 	// Inlined is true if this frame is actually an inlined call.
 	Inlined bool
+	// Bottom is true if this is the bottom of the stack
+	Bottom bool
 
 	// lastpc is a memory address guaranteed to belong to the last instruction
 	// executed in this stack frame.
@@ -57,6 +60,15 @@ type Stackframe struct {
 	// pkg/proc.
 	// Use this value to determine active lexical scopes for the stackframe.
 	lastpc uint64
+
+	// TopmostDefer is the defer that would be at the top of the stack when a
+	// panic unwind would get to this call frame, in other words it's the first
+	// deferred function that will  be called if the runtime unwinds past this
+	// call frame.
+	TopmostDefer *Defer
+
+	// Defers is the list of functions deferred by this stack frame (so far).
+	Defers []*Defer
 }
 
 // FrameOffset returns the address of the stack frame, absolute for system
@@ -88,10 +100,10 @@ func ThreadStacktrace(thread Thread, depth int) ([]Stackframe, error) {
 		if err != nil {
 			return nil, err
 		}
-		it := newStackIterator(thread.BinInfo(), thread, thread.BinInfo().Arch.RegistersToDwarfRegisters(regs), 0, nil, -1, nil)
+		it := newStackIterator(thread.BinInfo(), thread, thread.BinInfo().Arch.RegistersToDwarfRegisters(regs, thread.BinInfo().staticBase), 0, nil, -1, nil)
 		return it.stacktrace(depth)
 	}
-	return g.Stacktrace(depth)
+	return g.Stacktrace(depth, false)
 }
 
 func (g *G) stackIterator() (*stackIterator, error) {
@@ -105,19 +117,26 @@ func (g *G) stackIterator() (*stackIterator, error) {
 		if err != nil {
 			return nil, err
 		}
-		return newStackIterator(g.variable.bi, g.Thread, g.variable.bi.Arch.RegistersToDwarfRegisters(regs), g.stackhi, stkbar, g.stkbarPos, g), nil
+		return newStackIterator(g.variable.bi, g.Thread, g.variable.bi.Arch.RegistersToDwarfRegisters(regs, g.variable.bi.staticBase), g.stackhi, stkbar, g.stkbarPos, g), nil
 	}
 	return newStackIterator(g.variable.bi, g.variable.mem, g.variable.bi.Arch.GoroutineToDwarfRegisters(g), g.stackhi, stkbar, g.stkbarPos, g), nil
 }
 
 // Stacktrace returns the stack trace for a goroutine.
 // Note the locations in the array are return addresses not call addresses.
-func (g *G) Stacktrace(depth int) ([]Stackframe, error) {
+func (g *G) Stacktrace(depth int, readDefers bool) ([]Stackframe, error) {
 	it, err := g.stackIterator()
 	if err != nil {
 		return nil, err
 	}
-	return it.stacktrace(depth)
+	frames, err := it.stacktrace(depth)
+	if err != nil {
+		return nil, err
+	}
+	if readDefers {
+		g.readDefers(frames)
+	}
+	return frames, nil
 }
 
 // NullAddrError is an error for a null address.
@@ -322,6 +341,7 @@ func (it *stackIterator) switchStack() bool {
 
 // Frame returns the frame the iterator is pointing at.
 func (it *stackIterator) Frame() Stackframe {
+	it.frame.Bottom = it.atend
 	return it.frame
 }
 
@@ -366,13 +386,22 @@ func (it *stackIterator) newStackframe(ret, retaddr uint64) Stackframe {
 			// instruction to look for at pc - 1
 			r.Call = r.Current
 		default:
-			r.lastpc = it.pc - 1
-			r.Call.File, r.Call.Line, r.Call.Fn = it.bi.PCToLine(it.pc - 1)
-			if r.Call.Fn == nil {
-				r.Call.File = "?"
-				r.Call.Line = -1
+			if r.Current.Fn != nil && it.pc == r.Current.Fn.Entry {
+				// if the return address is the entry point of the function that
+				// contains it then this is some kind of fake return frame (for example
+				// runtime.sigreturn) that didn't actually call the current frame,
+				// attempting to get the location of the CALL instruction would just
+				// obfuscate what's going on, since there is no CALL instruction.
+				r.Call = r.Current
+			} else {
+				r.lastpc = it.pc - 1
+				r.Call.File, r.Call.Line, r.Call.Fn = it.bi.PCToLine(it.pc - 1)
+				if r.Call.Fn == nil {
+					r.Call.File = "?"
+					r.Call.Line = -1
+				}
+				r.Call.PC = r.Current.PC
 			}
-			r.Call.PC = r.Current.PC
 		}
 	} else {
 		r.Call = r.Current
@@ -413,7 +442,7 @@ func (it *stackIterator) appendInlineCalls(frames []Stackframe, frame Stackframe
 		callpc--
 	}
 
-	irdr := reader.InlineStack(it.bi.dwarf, frame.Call.Fn.offset, callpc)
+	irdr := reader.InlineStack(it.bi.dwarf, frame.Call.Fn.offset, reader.ToRelAddr(callpc, it.bi.staticBase))
 	for irdr.Next() {
 		entry, offset := reader.LoadAbstractOrigin(irdr.Entry(), it.dwarfReader)
 
@@ -460,7 +489,7 @@ func (it *stackIterator) appendInlineCalls(frames []Stackframe, frame Stackframe
 func (it *stackIterator) advanceRegs() (callFrameRegs op.DwarfRegisters, ret uint64, retaddr uint64) {
 	fde, err := it.bi.frameEntries.FDEForPC(it.pc)
 	var framectx *frame.FrameContext
-	if _, nofde := err.(*frame.NoFDEForPCError); nofde {
+	if _, nofde := err.(*frame.ErrNoFDEForPC); nofde {
 		framectx = it.bi.Arch.FixFrameUnwindContext(nil, it.pc, it.bi)
 	} else {
 		framectx = it.bi.Arch.FixFrameUnwindContext(fde.EstablishFrame(it.pc), it.pc, it.bi)
@@ -469,11 +498,11 @@ func (it *stackIterator) advanceRegs() (callFrameRegs op.DwarfRegisters, ret uin
 	cfareg, err := it.executeFrameRegRule(0, framectx.CFA, 0)
 	if cfareg == nil {
 		it.err = fmt.Errorf("CFA becomes undefined at PC %#x", it.pc)
-		return op.DwarfRegisters{}, 0, 0
+		return op.DwarfRegisters{StaticBase: it.bi.staticBase}, 0, 0
 	}
 	it.regs.CFA = int64(cfareg.Uint64Val)
 
-	callFrameRegs = op.DwarfRegisters{ByteOrder: it.regs.ByteOrder, PCRegNum: it.regs.PCRegNum, SPRegNum: it.regs.SPRegNum, BPRegNum: it.regs.BPRegNum}
+	callFrameRegs = op.DwarfRegisters{StaticBase: it.bi.staticBase, ByteOrder: it.regs.ByteOrder, PCRegNum: it.regs.PCRegNum, SPRegNum: it.regs.SPRegNum, BPRegNum: it.regs.BPRegNum}
 
 	// According to the standard the compiler should be responsible for emitting
 	// rules for the RSP register so that it can then be used to calculate CFA,
@@ -544,10 +573,9 @@ func (it *stackIterator) executeFrameRegRule(regnum uint64, rule frame.DWRule, c
 		}
 		if curReg.Uint64Val <= uint64(cfa) {
 			return it.readRegisterAt(regnum, curReg.Uint64Val)
-		} else {
-			newReg := *curReg
-			return &newReg, nil
 		}
+		newReg := *curReg
+		return &newReg, nil
 	}
 }
 
@@ -558,4 +586,141 @@ func (it *stackIterator) readRegisterAt(regnum uint64, addr uint64) (*op.DwarfRe
 		return nil, err
 	}
 	return op.DwarfRegisterFromBytes(buf), nil
+}
+
+// Defer represents one deferred call
+type Defer struct {
+	DeferredPC uint64 // Value of field _defer.fn.fn, the deferred function
+	DeferPC    uint64 // PC address of instruction that added this defer
+	SP         uint64 // Value of SP register when this function was deferred (this field gets adjusted when the stack is moved to match the new stack space)
+	link       *Defer // Next deferred function
+	argSz      int64
+
+	variable   *Variable
+	Unreadable error
+}
+
+// readDefers decorates the frames with the function deferred at each stack frame.
+func (g *G) readDefers(frames []Stackframe) {
+	curdefer := g.Defer()
+	i := 0
+
+	// scan simultaneously frames and the curdefer linked list, assigning
+	// defers to their associated frames.
+	for {
+		if curdefer == nil || i >= len(frames) {
+			return
+		}
+		if curdefer.Unreadable != nil {
+			// Current defer is unreadable, stick it into the first available frame
+			// (so that it can be reported to the user) and exit
+			frames[i].Defers = append(frames[i].Defers, curdefer)
+			return
+		}
+		if frames[i].Err != nil {
+			return
+		}
+
+		if frames[i].TopmostDefer == nil {
+			frames[i].TopmostDefer = curdefer
+		}
+
+		if frames[i].SystemStack || curdefer.SP >= uint64(frames[i].Regs.CFA) {
+			// frames[i].Regs.CFA is the value that SP had before the function of
+			// frames[i] was called.
+			// This means that when curdefer.SP == frames[i].Regs.CFA then curdefer
+			// was added by the previous frame.
+			//
+			// curdefer.SP < frames[i].Regs.CFA means curdefer was added by a
+			// function further down the stack.
+			//
+			// SystemStack frames live on a different physical stack and can't be
+			// compared with deferred frames.
+			i++
+		} else {
+			frames[i].Defers = append(frames[i].Defers, curdefer)
+			curdefer = curdefer.Next()
+		}
+	}
+}
+
+func (d *Defer) load() {
+	d.variable.loadValue(LoadConfig{false, 1, 0, 0, -1, 0})
+	if d.variable.Unreadable != nil {
+		d.Unreadable = d.variable.Unreadable
+		return
+	}
+
+	fnvar := d.variable.fieldVariable("fn").maybeDereference()
+	if fnvar.Addr != 0 {
+		fnvar = fnvar.loadFieldNamed("fn")
+		if fnvar.Unreadable == nil {
+			d.DeferredPC, _ = constant.Uint64Val(fnvar.Value)
+		}
+	}
+
+	d.DeferPC, _ = constant.Uint64Val(d.variable.fieldVariable("pc").Value)
+	d.SP, _ = constant.Uint64Val(d.variable.fieldVariable("sp").Value)
+	d.argSz, _ = constant.Int64Val(d.variable.fieldVariable("siz").Value)
+
+	linkvar := d.variable.fieldVariable("link").maybeDereference()
+	if linkvar.Addr != 0 {
+		d.link = &Defer{variable: linkvar}
+	}
+}
+
+// errSPDecreased is used when (*Defer).Next detects a corrupted linked
+// list, specifically when after followin a link pointer the value of SP
+// decreases rather than increasing or staying the same (the defer list is a
+// FIFO list, nodes further down the list have been added by function calls
+// further down the call stack and therefore the SP should always increase).
+var errSPDecreased = errors.New("corrupted defer list: SP decreased")
+
+// Next returns the next defer in the linked list
+func (d *Defer) Next() *Defer {
+	if d.link == nil {
+		return nil
+	}
+	d.link.load()
+	if d.link.SP < d.SP {
+		d.link.Unreadable = errSPDecreased
+	}
+	return d.link
+}
+
+// EvalScope returns an EvalScope relative to the argument frame of this deferred call.
+// The argument frame of a deferred call is stored in memory immediately
+// after the deferred header.
+func (d *Defer) EvalScope(thread Thread) (*EvalScope, error) {
+	scope, err := GoroutineScope(thread)
+	if err != nil {
+		return nil, fmt.Errorf("could not get scope: %v", err)
+	}
+
+	bi := thread.BinInfo()
+	scope.PC = d.DeferredPC
+	scope.File, scope.Line, scope.Fn = bi.PCToLine(d.DeferredPC)
+
+	if scope.Fn == nil {
+		return nil, fmt.Errorf("could not find function at %#x", d.DeferredPC)
+	}
+
+	// The arguments are stored immediately after the defer header struct, i.e.
+	// addr+sizeof(_defer). Since CFA in go is always the address of the first
+	// argument, that's what we use for the value of CFA.
+	// For SP we use CFA minus the size of one pointer because that would be
+	// the space occupied by pushing the return address on the stack during the
+	// CALL.
+	scope.Regs.CFA = (int64(d.variable.Addr) + d.variable.RealType.Common().ByteSize)
+	scope.Regs.Regs[scope.Regs.SPRegNum].Uint64Val = uint64(scope.Regs.CFA - int64(bi.Arch.PtrSize()))
+
+	bi.dwarfReader.Seek(scope.Fn.offset)
+	e, err := bi.dwarfReader.Next()
+	if err != nil {
+		return nil, fmt.Errorf("could not read DWARF function entry: %v", err)
+	}
+	scope.Regs.FrameBase, _, _, _ = bi.Location(e, dwarf.AttrFrameBase, scope.PC, scope.Regs)
+	scope.Mem = cacheMemory(scope.Mem, uintptr(scope.Regs.CFA), int(d.argSz))
+
+	return scope, nil
 }

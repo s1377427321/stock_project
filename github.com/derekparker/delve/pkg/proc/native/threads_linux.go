@@ -2,10 +2,13 @@ package native
 
 import (
 	"fmt"
+	"syscall"
+	"unsafe"
 
 	sys "golang.org/x/sys/unix"
 
 	"github.com/derekparker/delve/pkg/proc"
+	"github.com/derekparker/delve/pkg/proc/linutil"
 )
 
 type WaitStatus sys.WaitStatus
@@ -59,7 +62,7 @@ func (t *Thread) singleStep() (err error) {
 			if status != nil {
 				rs = status.ExitStatus()
 			}
-			return proc.ProcessExitedError{Pid: t.dbp.pid, Status: rs}
+			return proc.ErrProcessExited{Pid: t.dbp.pid, Status: rs}
 		}
 		if wpid == t.ID && status.StopSignal() == sys.SIGTRAP {
 			return nil
@@ -80,23 +83,33 @@ func (t *Thread) Blocked() bool {
 	return false
 }
 
-func (t *Thread) saveRegisters() (proc.Registers, error) {
-	var err error
-	t.dbp.execPtraceFunc(func() { err = sys.PtraceGetRegs(t.ID, &t.os.registers) })
-	if err != nil {
-		return nil, fmt.Errorf("could not save register contents")
-	}
-	return &Regs{&t.os.registers, nil}, nil
-}
+func (t *Thread) restoreRegisters(savedRegs proc.Registers) error {
+	sr := savedRegs.(*linutil.AMD64Registers)
 
-func (t *Thread) restoreRegisters() (err error) {
-	t.dbp.execPtraceFunc(func() { err = sys.PtraceSetRegs(t.ID, &t.os.registers) })
-	return
+	var restoreRegistersErr error
+	t.dbp.execPtraceFunc(func() {
+		restoreRegistersErr = sys.PtraceSetRegs(t.ID, (*sys.PtraceRegs)(sr.Regs))
+		if restoreRegistersErr != nil {
+			return
+		}
+		if sr.Fpregset.Xsave != nil {
+			iov := sys.Iovec{Base: &sr.Fpregset.Xsave[0], Len: uint64(len(sr.Fpregset.Xsave))}
+			_, _, restoreRegistersErr = syscall.Syscall6(syscall.SYS_PTRACE, sys.PTRACE_SETREGSET, uintptr(t.ID), _NT_X86_XSTATE, uintptr(unsafe.Pointer(&iov)), 0, 0)
+			return
+		}
+
+		_, _, restoreRegistersErr = syscall.Syscall6(syscall.SYS_PTRACE, sys.PTRACE_SETFPREGS, uintptr(t.ID), uintptr(0), uintptr(unsafe.Pointer(&sr.Fpregset.AMD64PtraceFpRegs)), 0, 0)
+		return
+	})
+	if restoreRegistersErr == syscall.Errno(0) {
+		restoreRegistersErr = nil
+	}
+	return restoreRegistersErr
 }
 
 func (t *Thread) WriteMemory(addr uintptr, data []byte) (written int, err error) {
 	if t.dbp.exited {
-		return 0, proc.ProcessExitedError{Pid: t.dbp.pid}
+		return 0, proc.ErrProcessExited{Pid: t.dbp.pid}
 	}
 	if len(data) == 0 {
 		return
@@ -107,11 +120,14 @@ func (t *Thread) WriteMemory(addr uintptr, data []byte) (written int, err error)
 
 func (t *Thread) ReadMemory(data []byte, addr uintptr) (n int, err error) {
 	if t.dbp.exited {
-		return 0, proc.ProcessExitedError{Pid: t.dbp.pid}
+		return 0, proc.ErrProcessExited{Pid: t.dbp.pid}
 	}
 	if len(data) == 0 {
 		return
 	}
 	t.dbp.execPtraceFunc(func() { _, err = sys.PtracePeekData(t.ID, addr, data) })
+	if err == nil {
+		n = len(data)
+	}
 	return
 }

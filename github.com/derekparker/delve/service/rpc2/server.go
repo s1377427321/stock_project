@@ -55,7 +55,12 @@ type DetachOut struct {
 
 // Detach detaches the debugger, optionally killing the process.
 func (s *RPCServer) Detach(arg DetachIn, out *DetachOut) error {
-	return s.debugger.Detach(arg.Kill)
+	err := s.debugger.Detach(arg.Kill)
+	if s.config.DisconnectChan != nil {
+		close(s.config.DisconnectChan)
+		s.config.DisconnectChan = nil
+	}
+	return err
 }
 
 type RestartIn struct {
@@ -85,6 +90,8 @@ func (s *RPCServer) Restart(arg RestartIn, out *RestartOut) error {
 }
 
 type StateIn struct {
+	// If NonBlocking is true State will return immediately even if the target process is running.
+	NonBlocking bool
 }
 
 type StateOut struct {
@@ -93,7 +100,7 @@ type StateOut struct {
 
 // State returns the current debugger state.
 func (s *RPCServer) State(arg StateIn, out *StateOut) error {
-	st, err := s.debugger.State()
+	st, err := s.debugger.State(arg.NonBlocking)
 	if err != nil {
 		return err
 	}
@@ -145,10 +152,11 @@ func (s *RPCServer) GetBreakpoint(arg GetBreakpointIn, out *GetBreakpointOut) er
 }
 
 type StacktraceIn struct {
-	Id    int
-	Depth int
-	Full  bool
-	Cfg   *api.LoadConfig
+	Id     int
+	Depth  int
+	Full   bool
+	Defers bool // read deferred functions
+	Cfg    *api.LoadConfig
 }
 
 type StacktraceOut struct {
@@ -164,11 +172,11 @@ func (s *RPCServer) Stacktrace(arg StacktraceIn, out *StacktraceOut) error {
 	if cfg == nil && arg.Full {
 		cfg = &api.LoadConfig{true, 1, 64, 64, -1}
 	}
-	locs, err := s.debugger.Stacktrace(arg.Id, arg.Depth, api.LoadConfigToProc(cfg))
+	var err error
+	out.Locations, err = s.debugger.Stacktrace(arg.Id, arg.Depth, arg.Defers, api.LoadConfigToProc(cfg))
 	if err != nil {
 		return err
 	}
-	out.Locations = locs
 	return nil
 }
 
@@ -317,7 +325,7 @@ type ListPackageVarsOut struct {
 
 // ListPackageVars lists all package variables in the context of the current thread.
 func (s *RPCServer) ListPackageVars(arg ListPackageVarsIn, out *ListPackageVarsOut) error {
-	state, err := s.debugger.State()
+	state, err := s.debugger.State(false)
 	if err != nil {
 		return err
 	}
@@ -348,7 +356,7 @@ type ListRegistersOut struct {
 // ListRegisters lists registers and their values.
 func (s *RPCServer) ListRegisters(arg ListRegistersIn, out *ListRegistersOut) error {
 	if arg.ThreadID == 0 {
-		state, err := s.debugger.State()
+		state, err := s.debugger.State(false)
 		if err != nil {
 			return err
 		}
@@ -631,4 +639,49 @@ type ClearCheckpointOut struct {
 
 func (s *RPCServer) ClearCheckpoint(arg ClearCheckpointIn, out *ClearCheckpointOut) error {
 	return s.debugger.ClearCheckpoint(arg.ID)
+}
+
+type IsMulticlientIn struct {
+}
+
+type IsMulticlientOut struct {
+	// IsMulticlient returns true if the headless instance was started with --accept-multiclient
+	IsMulticlient bool
+}
+
+func (s *RPCServer) IsMulticlient(arg IsMulticlientIn, out *IsMulticlientOut) error {
+	*out = IsMulticlientOut{
+		IsMulticlient: s.config.AcceptMulti,
+	}
+	return nil
+}
+
+// FunctionReturnLocationsIn holds arguments for the
+// FunctionReturnLocationsRPC call. It holds the name of
+// the function for which all return locations should be
+// given.
+type FunctionReturnLocationsIn struct {
+	// FnName is the name of the function for which all
+	// return locations should be given.
+	FnName string
+}
+
+// FunctionReturnLocationsOut holds the result of the FunctionReturnLocations
+// RPC call. It provides the list of addresses that the given function returns,
+// for example with a `RET` instruction or `CALL runtime.deferreturn`.
+type FunctionReturnLocationsOut struct {
+	// Addrs is the list of all locations where the given function returns.
+	Addrs []uint64
+}
+
+// FunctionReturnLocations is the implements the client call of the same name. Look at client documentation for more information.
+func (s *RPCServer) FunctionReturnLocations(in FunctionReturnLocationsIn, out *FunctionReturnLocationsOut) error {
+	addrs, err := s.debugger.FunctionReturnLocations(in.FnName)
+	if err != nil {
+		return err
+	}
+	*out = FunctionReturnLocationsOut{
+		Addrs: addrs,
+	}
+	return nil
 }

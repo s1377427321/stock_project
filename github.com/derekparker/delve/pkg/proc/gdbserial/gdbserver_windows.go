@@ -2,6 +2,9 @@ package gdbserial
 
 import "syscall"
 
-func backgroundSysProcAttr() *syscall.SysProcAttr {
+func sysProcAttr(foreground bool) *syscall.SysProcAttr {
 	return nil
+}
+
+func foregroundSignalsIgnore() {
 }
