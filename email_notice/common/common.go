@@ -2,7 +2,7 @@ package common
 
 import (
 	"common"
-									)
+)
 
 /*
 华宝添益
@@ -36,8 +36,6 @@ type InitBuyStocksS struct {
 }
 
 func IntToFloat64(n int) float64 {
-	r:=common.Round64(float64(n), 0)
+	r := common.Round64(float64(n), 0)
 	return r
 }
-
-

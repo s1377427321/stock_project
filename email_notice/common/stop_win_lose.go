@@ -198,7 +198,23 @@ func (s *StopWinLoseManage) ShowItems(code string) string {
 	var data []byte
 	var err error
 	//var result string
-	tempData:=""
+	tempData:=`
+add
+http://swjswj.vip:5555/addswl?code=000895&name=双汇发展&price=23.968&magnification=1
+
+delete
+http://swjswj.vip:5555/deleteswl?code=601628
+
+show
+http://swjswj.vip:5555/showstocksswl?code=000001
+
+low suction
+http://swjswj.vip:5555/addlowsuctionswl?code=000001&buy_num=1400&price=10.500
+
+hight throw
+http://swjswj.vip:5555/reducehighthrowswl?code=000001&buy_num=1400&price=10.500
+
+`
 	if code == "" {
 		//data, err = json.Marshal(s.Items)
 		//if err != nil {
@@ -210,7 +226,7 @@ func (s *StopWinLoseManage) ShowItems(code string) string {
 			if err != nil {
 				panic("ShowItems  Error 11 " + err.Error())
 			}
-			tempData = tempData + string(d)+"\n\n"
+			tempData = tempData + string(d)+  "\n\n "
 		}
 	}else {
 		items, _ := s.Items[code]

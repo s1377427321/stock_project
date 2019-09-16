@@ -1,12 +1,16 @@
 package main
 
 import (
-	"time"
 	. "email_notice/common"
 	"sync"
 	"common/email"
 	"common"
-			)
+	"time"
+	"github.com/spf13/viper"
+	"strings"
+	"strconv"
+	"fmt"
+)
 
 var mainUrl = "http://hq.sinajs.cn/list=%s"
 var httpPort = ":5555"
@@ -47,6 +51,9 @@ func init() {
 
 //这个程序负债监控股票价格，设置一个最高价格，最低价格，到了这个价格，就会通知用户，去操作
 func main() {
+
+	common.StartConfigTask("conf/email_notice.yaml", CallBack)
+
 	go RunHttpServer()
 
 	DoInitStock()
@@ -64,6 +71,37 @@ func main() {
 		if h >= 15 && h < 16 {
 			noticeIsAlive()
 		}
+	}
+}
+
+func CallBack() {
+	noticeStocks := viper.GetStringSlice("notice_stocks")
+	for _, v := range noticeStocks {
+		data := strings.Split(v, "|")
+		money, _ := strconv.ParseFloat(data[0], 64)
+		name := data[1]
+		code := data[2]
+		heigh, _ := strconv.ParseFloat(data[3], 64)
+		low, _ := strconv.ParseFloat(data[4], 64)
+
+		DeleteNoticeStock(code)
+
+		fmt.Println(fmt.Sprintf("%v:%v:%v:%v:%v", money, name, code, heigh, low))
+		AddNoticeStock(code, heigh, low, money)
+	}
+
+	stopwinloses := viper.GetStringSlice("stop_win_lose")
+	for _, v := range stopwinloses {
+		data := strings.Split(v, "|")
+
+		code := data[0]
+		name := data[1]
+		price, _ := strconv.ParseFloat(data[2], 64)
+		magnification, _ := strconv.Atoi(data[3])
+
+		InstanceStopWinLoseManage().DeleteStock(code)
+
+		InstanceStopWinLoseManage().Add(code, name, price, magnification)
 	}
 }
 

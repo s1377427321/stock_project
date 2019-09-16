@@ -17,6 +17,18 @@ http://swjswj.vip:5555/add?code=000895&height=26.00&low=23.70&money=160000
 http://swjswj.vip:5555/delete?code=000895
  */
  
+ /*
+ 
+ http://swjswj.vip:5555/showgrid?code=000895&name=深圳机场&buy_price=10.97&bear_lose=0.5&all_money=160000&divide=10
+  http://swjswj.vip:5555/showgrid2?code=512000&name=劵商ETF&buy_price=0.969&sell_price=0.596&all_money=160000&divide=10
+ 	code := c.QueryParam("code")
+ 	name := c.QueryParam("name")
+ 	buyPrice, _ := strconv.ParseFloat(c.QueryParam("buy_price"), 64)
+ 	bearLose, _ := strconv.ParseFloat(c.QueryParam("bear_lose"), 64)
+ 	allMoney, _ := strconv.ParseFloat(c.QueryParam("all_money"), 64)
+ 	divide, _ := strconv.ParseFloat(c.QueryParam("divide"), 64)
+ */
+ 
  
  
  http://swjswj.vip:5555/addswl?code=000089&name=深圳机场&price=10.97&magnification=1

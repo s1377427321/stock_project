@@ -23,12 +23,23 @@ type Average struct {
 	Day5 float64
 }
 
+type StockCommon struct {
+	Code      string
+	Name      string
+	Url       string
+	AllMoney  float64
+	BuyPrice  float64
+	BuyMoney  float64
+	SellPrice float64
+	BuyNums   int
+}
+
 type Stock struct {
 	BuyMoney       float64
 	Code           string
 	Url            string
 	Name           string
-	HightPrice    float64
+	HightPrice     float64
 	LowPrice       float64
 	mx             sync.Mutex
 	NoticeCallBack NoticeEmailCallBack
