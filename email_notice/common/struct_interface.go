@@ -24,14 +24,14 @@ type Average struct {
 }
 
 type StockCommon struct {
-	Code      string
-	Name      string
-	Url       string
-	AllMoney  float64
-	BuyPrice  float64
-	BuyMoney  float64
-	SellPrice float64
-	BuyNums   int
+	Code      string `json:"code"`
+	Name      string `json:"name"`
+	Url       string `json:"url"`
+	AllMoney  float64 `json:"all_money"`
+	BuyPrice  float64 `json:"buy_price"`
+	BuyMoney  float64 `json:"buy_money"`
+	SellPrice float64 `json:"sell_price"`
+	BuyNums   int `json:"buy_nums"`
 }
 
 type Stock struct {

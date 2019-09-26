@@ -10,6 +10,8 @@ import (
 	"strings"
 	"strconv"
 	"fmt"
+
+	fund "fund/stock_data_save"
 )
 
 var mainUrl = "http://hq.sinajs.cn/list=%s"
@@ -21,6 +23,8 @@ var mx sync.Mutex
 
 var BuyStocks map[string]*BuyStock
 var bmx sync.Mutex
+
+var isMakeOnceUpdateMysql bool = false
 
 var emailServer = &email.EmailServers{
 	ServerEmail:    "1377427321@qq.com",
@@ -75,6 +79,19 @@ func main() {
 }
 
 func CallBack() {
+
+	isUpdateMysql := viper.GetBool("is_update_mysql")
+	if isUpdateMysql == true && isMakeOnceUpdateMysql == false {
+		go UpdateMySQL()
+		isMakeOnceUpdateMysql = true
+	} else if isUpdateMysql == false {
+		isMakeOnceUpdateMysql = false
+	}
+	go func() {
+		//fund.UpdateDayTradeData()
+		fund.FindConceptIncomeGood()
+	}()
+
 	noticeStocks := viper.GetStringSlice("notice_stocks")
 	for _, v := range noticeStocks {
 		data := strings.Split(v, "|")
@@ -103,6 +120,7 @@ func CallBack() {
 
 		InstanceStopWinLoseManage().Add(code, name, price, magnification)
 	}
+
 }
 
 func noticeIsAlive() {

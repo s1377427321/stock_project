@@ -219,7 +219,7 @@ func showStockGrid(c echo.Context) error {
 
 	sellPrice := buyPrice * (1 - bearLose)
 
-	newgrid := NewStockGrid(code, name, buyPrice,sellPrice, bearLose, allMoney, divide)
+	newgrid := NewStockGrid(code, name, buyPrice, sellPrice, bearLose, allMoney, divide)
 
 	newgrid.Do()
 
@@ -243,6 +243,11 @@ func showStockGrid2(c echo.Context) error {
 
 	//return c.JSON(http.StatusOK, newgrid.Grids)
 	return c.HTML(http.StatusOK, newgrid.ToString())
+}
+
+func updateMysqlAll(c echo.Context) error {
+	go UpdateMySQL()
+	return c.JSON(http.StatusOK, "update doing")
 }
 
 func RunHttpServer() {
@@ -270,9 +275,18 @@ func RunHttpServer() {
 	e.GET("/showgrid", showStockGrid)
 	e.GET("/showgrid2", showStockGrid2)
 
+	e.GET("/updatemysqlall", updateMysqlAll)
+	e.GET("/updateAllStocksAndInsertToSQL", updateAllStocksAndInsertToSQL)
+	e.GET("/saveIncomeDatasToMySQL", saveIncomeDatasToMySQL)
+	e.GET("/spdateDayTradeData", spdateDayTradeData)
+	e.GET("/saveConceptInfosToMySQL", saveConceptInfosToMySQL)
+	e.GET("/saveConceptDetailInfosToMySQL", saveConceptDetailInfosToMySQL)
+	e.GET("/saveFinaIndicatorFromTuShare", saveFinaIndicatorFromTuShare)
+
 	fmt.Println("RunHttpServer ----------------- ")
 	err := e.Start(httpPort)
 	if err != nil {
 		panic(err.Error())
 	}
 }
+
